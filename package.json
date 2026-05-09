@@ -1,10 +1,11 @@
 {
-  "name": "gpt-image-playground",
+  "name": "yunyi-image",
   "private": true,
   "version": "0.3.3",
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "start": "node server/index.mjs",
     "mock:api": "node scripts/mock-image-api.mjs",
     "build": "tsc -b && vite build",
     "deploy:cf": "npm run build && wrangler deploy",
@@ -17,9 +18,17 @@
     "fflate": "^0.8.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "sql.js": "^1.14.1",
     "zustand": "^5.0.5"
   },
   "devDependencies": {
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__template": "^7.4.4",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/chai": "^5.2.3",
+    "@types/deep-eql": "^4.0.2",
+    "@types/estree": "^1.0.9",
     "@types/react": "^19.1.2",
     "@types/react-dom": "^19.1.2",
     "@vitejs/plugin-react": "^4.4.1",

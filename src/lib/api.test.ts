@@ -176,7 +176,7 @@ describe('callImageApi', () => {
     expect((init as RequestInit).cache).toBe('no-store')
   })
 
-  it('ignores stored API proxy settings when the current deployment has no proxy', async () => {
+  it('uses the YunYi server proxy for image requests', async () => {
     vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'false')
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
       data: [{ b64_json: 'aW1hZ2U=' }],
@@ -198,7 +198,7 @@ describe('callImageApi', () => {
     })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'http://api.example.com/v1/images/generations',
+      '/api-proxy/images/generations',
       expect.objectContaining({ method: 'POST' }),
     )
   })

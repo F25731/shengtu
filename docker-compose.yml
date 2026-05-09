@@ -1,0 +1,19 @@
+services:
+  yunyi-image:
+    build: .
+    container_name: yunyi-image
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      YUNYI_ADMIN_PASSWORD: "${YUNYI_ADMIN_PASSWORD:-admin123456}"
+      BACKGRACE_API_URL: "${BACKGRACE_API_URL:-https://backgrace.com/v1}"
+      BACKGRACE_API_KEY: "${BACKGRACE_API_KEY:-}"
+      YUNYI_IMAGE_MODEL: "${YUNYI_IMAGE_MODEL:-gpt-image-2}"
+      YUNYI_PURCHASE_URL: "${YUNYI_PURCHASE_URL:-}"
+      YUNYI_COST_PER_GENERATION: "${YUNYI_COST_PER_GENERATION:-1}"
+      YUNYI_DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data

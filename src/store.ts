@@ -1014,9 +1014,14 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     }
   }
 
+  if (maskDraft && !inputImages.some((img) => img.id === maskDraft.targetImageId)) {
+    useStore.setState({ maskDraft: null, maskEditorImageId: null })
+    showToast('遮罩主图已不存在，请重新选择图片', 'error')
+    return
+  }
+
   if (validateApiProfile(activeProfile)) {
-    showToast(`请先完善请求 API 配置：${validateApiProfile(activeProfile)}`, 'error')
-    useStore.getState().setShowSettings(true)
+    showToast('生图服务暂未完成后台配置，请稍后再试', 'error')
     return
   }
 
@@ -1227,6 +1232,7 @@ async function executeTask(taskId: string) {
     })
 
     useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
+    window.__YUNYI_REFRESH_BALANCE__?.()
     const currentMask = useStore.getState().maskDraft
     if (
       maskDataUrl &&
@@ -1280,6 +1286,7 @@ async function executeTask(taskId: string) {
         elapsed: Date.now() - task.createdAt,
       })
       useStore.getState().setDetailTaskId(taskId)
+      window.__YUNYI_REFRESH_BALANCE__?.()
     }
   } finally {
     // 释放输入图片的内存缓存（已持久化到 IndexedDB，后续按需从 DB 加载）
@@ -1397,7 +1404,7 @@ export async function reuseConfig(task: TaskRecord) {
 
 /** 编辑输出：将输出图加入输入 */
 export async function editOutputs(task: TaskRecord) {
-  const { inputImages, addInputImage, showToast } = useStore.getState()
+  const { inputImages, addInputImage, showToast, setPrompt } = useStore.getState()
   if (!task.outputImages?.length) return
 
   let added = 0
@@ -1409,7 +1416,8 @@ export async function editOutputs(task: TaskRecord) {
       added++
     }
   }
-  showToast(`已添加 ${added} 张输出图到输入`, 'success')
+  setPrompt('')
+  showToast(`已把 ${added} 张结果图放入输入区，可以继续输入修改要求`, 'success')
 }
 
 /** 删除多条任务 */

@@ -17,6 +17,7 @@ import {
   normalizeBase64Image,
   pickActualParams,
 } from './imageApiShared'
+import { createCardsHeaderValue } from './cardClient'
 
 const PROMPT_REWRITE_GUARD_PREFIX = 'Use the following text as the complete prompt. Do not rewrite it:'
 
@@ -79,6 +80,7 @@ function normalizeImageApiPayload(value: unknown): ImageApiResponse {
 function createRequestHeaders(profile: ApiProfile): Record<string, string> {
   return {
     Authorization: `Bearer ${profile.apiKey}`,
+    'X-YunYi-Cards': createCardsHeaderValue(),
   }
 }
 

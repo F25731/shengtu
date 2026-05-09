@@ -228,7 +228,7 @@ describe('reused task API profile', () => {
     expect(state.tasks).toEqual([])
     expect(state.setConfirmDialog).toHaveBeenCalledWith(expect.objectContaining({
       title: '找不到 API 配置',
-      message: '找不到复用任务所使用的 API 配置「未知配置」，要使用当前的 API 配置「默认」提交任务吗？',
+      message: '找不到复用任务所使用的 API 配置「未知配置」，要使用当前的 API 配置「BackGrace」提交任务吗？',
       confirmText: '使用当前配置提交',
       cancelText: '放弃提交',
     }))
