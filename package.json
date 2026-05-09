@@ -3,6 +3,14 @@
   "private": true,
   "version": "0.3.3",
   "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "sharp",
+      "workerd"
+    ]
+  },
   "scripts": {
     "dev": "vite",
     "start": "node server/index.mjs",
