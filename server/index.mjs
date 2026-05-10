@@ -423,6 +423,22 @@ async function handleImageProxy(req, res, pathname) {
   const prompt = extractPrompt(contentType, body)
   const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
 
+  const controller = new AbortController()
+  const timeoutSeconds = Math.max(1, Number(settings.request_timeout_seconds || 300))
+  let abortMessage = ''
+  let responseCompleted = false
+  const abortProxy = (message) => {
+    if (responseCompleted || controller.signal.aborted) return
+    abortMessage = message
+    controller.abort()
+  }
+  const timeoutId = setTimeout(() => {
+    abortProxy(`请求超时：超过 ${timeoutSeconds} 秒仍未完成`)
+  }, timeoutSeconds * 1000)
+  res.on('close', () => {
+    if (!responseCompleted) abortProxy('客户端已断开连接或前端请求超时')
+  })
+
   try {
     const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
     const targetUrl = `${apiUrl}/${apiPath}`
@@ -435,6 +451,7 @@ async function handleImageProxy(req, res, pathname) {
         Accept: String(req.headers.accept || 'application/json'),
       },
       body: proxyBody,
+      signal: controller.signal,
     })
     const responseBuffer = Buffer.from(await response.arrayBuffer())
     const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
@@ -449,12 +466,18 @@ async function handleImageProxy(req, res, pathname) {
       'Cache-Control': 'no-store',
       'X-YunYi-Balance': String(getCardsBalance(codes).totalRemaining),
     })
+    responseCompleted = true
     res.end(responseBuffer)
   } catch (err) {
     refundCredits(chargedCard, cost)
-    const message = err instanceof Error ? err.message : String(err)
+    const message = abortMessage || (err instanceof Error ? err.message : String(err))
     updateUsageLog(logId, 'refunded', message)
-    sendJson(res, 502, { error: { message: `生图失败，次数已退回：${message}` } })
+    if (!res.destroyed && !res.writableEnded) {
+      responseCompleted = true
+      sendJson(res, 502, { error: { message: `生图失败，次数已退回：${message}` } })
+    }
+  } finally {
+    clearTimeout(timeoutId)
   }
 }
 

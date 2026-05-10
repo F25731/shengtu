@@ -680,7 +680,10 @@ function scheduleOpenAIWatchdog(taskId: string, timeoutSeconds: number) {
   const timer = setTimeout(() => {
     openAIWatchdogTimers.delete(taskId)
     const failed = failOpenAITaskIfStillRunning(taskId, createOpenAITimeoutError(timeoutSeconds))
-    if (failed) useStore.getState().showToast('OpenAI 任务请求超时', 'error')
+    if (failed) {
+      useStore.getState().showToast('OpenAI 任务请求超时', 'error')
+      window.setTimeout(() => window.__YUNYI_REFRESH_BALANCE__?.(), 1500)
+    }
   }, remainingMs)
   openAIWatchdogTimers.set(taskId, timer)
 }
