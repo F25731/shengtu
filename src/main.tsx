@@ -7,17 +7,23 @@ import { installMobileViewportGuards } from './lib/viewport'
 installMobileViewportGuards()
 
 if ('serviceWorker' in navigator) {
-  if (import.meta.env.PROD) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch((error) => {
-        console.error('Service worker registration failed:', error)
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.getRegistrations()
+      .then((registrations) => Promise.all(registrations.map((registration) => registration.unregister())))
+      .catch((error) => {
+        console.error('Service worker cleanup failed:', error)
       })
-    })
-  } else {
-    navigator.serviceWorker.getRegistrations().then((registrations) => {
-      registrations.forEach((registration) => registration.unregister())
-    })
-  }
+  })
+}
+
+if ('caches' in window) {
+  window.addEventListener('load', () => {
+    caches.keys()
+      .then((keys) => Promise.all(keys.map((key) => caches.delete(key))))
+      .catch((error) => {
+        console.error('Cache cleanup failed:', error)
+      })
+  })
 }
 
 createRoot(document.getElementById('root')!).render(
