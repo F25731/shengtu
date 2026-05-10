@@ -1,4 +1,5 @@
 const CARD_CODES_STORAGE_KEY = 'yunyi.cardCodes'
+const CARD_BALANCE_CACHE_KEY = 'yunyi.cardBalanceCache'
 
 export interface PublicCard {
   code: string
@@ -42,6 +43,26 @@ export function saveStoredCardCodes(codes: string[]) {
   localStorage.setItem(CARD_CODES_STORAGE_KEY, JSON.stringify([...new Set(codes.map(normalizeCardCode).filter(Boolean))]))
 }
 
+export function readCachedCardBalance(): CardBalance | null {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(CARD_BALANCE_CACHE_KEY) || 'null')
+    if (!parsed || typeof parsed !== 'object') return null
+    const totalRemaining = Number(parsed.totalRemaining)
+    const cards = Array.isArray(parsed.cards) ? parsed.cards : []
+    if (!Number.isFinite(totalRemaining)) return null
+    return { cards, totalRemaining }
+  } catch {
+    return null
+  }
+}
+
+function saveCachedCardBalance(balance: CardBalance) {
+  localStorage.setItem(CARD_BALANCE_CACHE_KEY, JSON.stringify({
+    ...balance,
+    cachedAt: Date.now(),
+  }))
+}
+
 export function hasStoredCards() {
   return readStoredCardCodes().length > 0
 }
@@ -75,7 +96,9 @@ export async function readCardBalance(): Promise<CardBalance> {
     body: JSON.stringify({ codes: readStoredCardCodes() }),
   })
   if (!response.ok) return { cards: [], totalRemaining: 0 }
-  return response.json()
+  const balance = await response.json()
+  saveCachedCardBalance(balance)
+  return balance
 }
 
 export function createCardsHeaderValue() {

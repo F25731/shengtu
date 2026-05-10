@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { initStore } from './store'
 import { useStore } from './store'
 import { buildSettingsFromUrlParams, clearUrlSettingParams, hasUrlSettingParams } from './lib/urlSettings'
@@ -13,22 +13,33 @@ import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import CardGate from './components/CardGate'
 import AddCardModal from './components/AddCardModal'
-import { readCardBalance, readClientConfig, type CardBalance, type ClientConfig } from './lib/cardClient'
+import { readCachedCardBalance, readCardBalance, readClientConfig, type CardBalance, type ClientConfig } from './lib/cardClient'
+
+const BALANCE_REFRESH_INTERVAL_MS = 30_000
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
   const [cardReady, setCardReady] = useState(false)
   const [showAddCard, setShowAddCard] = useState(false)
-  const [balance, setBalance] = useState<CardBalance>({ cards: [], totalRemaining: 0 })
+  const [balance, setBalance] = useState<CardBalance>(() => readCachedCardBalance() ?? { cards: [], totalRemaining: 0 })
   const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1 })
+  const refreshInFlightRef = useRef(false)
 
   const refreshBalance = useCallback(async () => {
-    const [nextBalance, nextConfig] = await Promise.all([
-      readCardBalance(),
-      readClientConfig(),
-    ])
-    setBalance(nextBalance)
-    setClientConfig(nextConfig)
+    if (refreshInFlightRef.current) return
+    refreshInFlightRef.current = true
+    try {
+      const [nextBalance, nextConfig] = await Promise.all([
+        readCardBalance(),
+        readClientConfig(),
+      ])
+      setBalance(nextBalance)
+      setClientConfig(nextConfig)
+    } catch {
+      // Keep the cached balance visible if the network is temporarily unavailable.
+    } finally {
+      refreshInFlightRef.current = false
+    }
   }, [])
 
   useEffect(() => {
@@ -39,6 +50,33 @@ export default function App() {
       delete window.__YUNYI_REFRESH_BALANCE__
     }
   }, [refreshBalance])
+
+  useEffect(() => {
+    if (!cardReady) return
+
+    void refreshBalance()
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshBalance()
+    }, BALANCE_REFRESH_INTERVAL_MS)
+
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void refreshBalance()
+    }
+    const refreshNow = () => {
+      void refreshBalance()
+    }
+
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener('focus', refreshNow)
+    window.addEventListener('online', refreshNow)
+
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener('focus', refreshNow)
+      window.removeEventListener('online', refreshNow)
+    }
+  }, [cardReady, refreshBalance])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)

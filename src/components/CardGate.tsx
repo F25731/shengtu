@@ -15,15 +15,20 @@ export default function CardGate({ onReady }: Props) {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
+      if (hasStoredCards()) {
+        onReady()
+        readCardBalance().catch(() => {})
+        readClientConfig()
+          .then((nextConfig) => {
+            if (!cancelled) setConfig(nextConfig)
+          })
+          .catch(() => {})
+        return
+      }
       const nextConfig = await readClientConfig()
       if (cancelled) return
       setConfig(nextConfig)
-      if (hasStoredCards()) {
-        await readCardBalance()
-        if (!cancelled) onReady()
-      } else if (!cancelled) {
-        setLoading(false)
-      }
+      setLoading(false)
     })().catch(() => {
       if (!cancelled) setLoading(false)
     })
