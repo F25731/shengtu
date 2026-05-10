@@ -16,6 +16,7 @@ import {
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
+  resolveYunYiTaskResponse,
 } from './imageApiShared'
 import { createCardsHeaderValue } from './cardClient'
 
@@ -378,6 +379,8 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
         signal: controller.signal,
       })
     }
+
+    response = await resolveYunYiTaskResponse(response, controller.signal)
 
     if (!response.ok) {
       throw new Error(await getApiErrorMessage(response))
@@ -756,11 +759,13 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       signal: controller.signal,
     })
 
-    if (!response.ok) {
-      throw new Error(await getApiErrorMessage(response))
+    const finalResponse = await resolveYunYiTaskResponse(response, controller.signal)
+
+    if (!finalResponse.ok) {
+      throw new Error(await getApiErrorMessage(finalResponse))
     }
 
-    const payload = await response.json() as ResponsesApiResponse
+    const payload = await finalResponse.json() as ResponsesApiResponse
     const imageResults = parseResponsesImageResults(payload, mime)
     const actualParams = mergeActualParams(
       imageResults[0]?.actualParams ?? {},

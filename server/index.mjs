@@ -2,7 +2,7 @@ import http from 'node:http'
 import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHash, randomInt } from 'node:crypto'
+import { createHash, randomInt, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 import initSqlJs from 'sql.js'
 
@@ -16,6 +16,8 @@ const port = Number(process.env.PORT || 3000)
 const adminPassword = process.env.YUNYI_ADMIN_PASSWORD || 'admin123456'
 const adminToken = createHash('sha256').update(`yunyi-admin:${adminPassword}`).digest('hex')
 const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+const proxyJobs = new Map()
+const proxyJobTtlMs = 30 * 60 * 1000
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
 
 const mimeTypes = {
@@ -265,6 +267,57 @@ function sendJson(res, status, payload) {
   res.end(body)
 }
 
+function cleanupProxyJobs() {
+  const now = Date.now()
+  for (const [id, job] of proxyJobs.entries()) {
+    if (job.expiresAt <= now) proxyJobs.delete(id)
+  }
+}
+
+function createProxyJob(initial) {
+  cleanupProxyJobs()
+  const now = Date.now()
+  const job = {
+    id: randomUUID(),
+    status: 'pending',
+    createdAt: new Date(now).toISOString(),
+    updatedAt: new Date(now).toISOString(),
+    expiresAt: now + proxyJobTtlMs,
+    httpStatus: 202,
+    contentType: 'application/json; charset=utf-8',
+    body: undefined,
+    bodyText: '',
+    errorMessage: '',
+    ...initial,
+  }
+  proxyJobs.set(job.id, job)
+  return job
+}
+
+function touchProxyJob(job, patch = {}) {
+  Object.assign(job, patch, {
+    updatedAt: nowIso(),
+    expiresAt: Date.now() + proxyJobTtlMs,
+  })
+}
+
+function parseProxyResponseBody(buffer, contentType) {
+  const text = buffer.toString('utf8')
+  if (contentType.includes('application/json')) {
+    try {
+      return { body: JSON.parse(text), bodyText: '' }
+    } catch {
+      return { body: undefined, bodyText: text }
+    }
+  }
+  return { body: undefined, bodyText: text }
+}
+
+function createProxyErrorMessage(prefix, detail) {
+  const text = String(detail || '').trim()
+  return text ? `${prefix}: ${text}` : prefix
+}
+
 function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
     'Content-Type': contentType,
@@ -499,6 +552,179 @@ async function handleImageProxy(req, res, pathname) {
   }
 }
 
+async function handleImageProxyTaskMode(req, res, pathname) {
+  if (req.method !== 'POST') {
+    sendJson(res, 405, { error: { message: 'Method not allowed' } })
+    return
+  }
+  const settings = getSettings()
+  const apiKey = String(settings.backgrace_api_key || '').trim()
+  const apiUrl = String(settings.backgrace_api_url || 'https://backgrace.com/v1').replace(/\/+$/, '')
+  const baseCost = Math.max(1, Number(settings.cost_per_generation || 1))
+  if (!apiKey) {
+    sendJson(res, 503, { error: { message: '生图服务暂未完成后台配置，请稍后再试' } })
+    return
+  }
+
+  const contentType = String(req.headers['content-type'] || '')
+  const body = await readBody(req)
+  const imageCount = Math.max(1, extractImageCount(contentType, body))
+  const cost = baseCost * imageCount
+  const codes = parseCardsHeader(req)
+  if (!codes.length) {
+    sendJson(res, 402, { error: { message: '请先输入卡密' } })
+    return
+  }
+
+  const chargedCard = deductCredits(codes, cost)
+  if (!chargedCard) {
+    sendJson(res, 402, { error: { message: '卡密次数不足，请购买或添加卡密' } })
+    return
+  }
+
+  const prompt = extractPrompt(contentType, body)
+  const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
+  const job = createProxyJob({ logId, chargedCard, codes, cost, prompt })
+
+  sendJson(res, 202, {
+    ok: true,
+    taskId: job.id,
+    status: job.status,
+    pollUrl: `/api-proxy/tasks/${job.id}`,
+    balance: getCardsBalance(codes),
+  })
+
+  runImageProxyJob(job, {
+    reqAccept: String(req.headers.accept || 'application/json'),
+    settings,
+    apiKey,
+    apiUrl,
+    pathname,
+    contentType,
+    body,
+  }).catch((err) => {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`YunYi proxy job ${job.id} failed unexpectedly:`, message)
+  })
+}
+
+async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, pathname, contentType, body }) {
+  const { chargedCard, codes, cost, logId } = job
+  const controller = new AbortController()
+  const timeoutSeconds = Math.max(1, Number(settings.request_timeout_seconds || 300))
+  let abortMessage = ''
+  const timeoutId = setTimeout(() => {
+    abortMessage = `请求超时：超过 ${timeoutSeconds} 秒仍未完成`
+    controller.abort()
+  }, timeoutSeconds * 1000)
+
+  try {
+    touchProxyJob(job, { status: 'running' })
+    const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
+    const targetUrl = `${apiUrl}/${apiPath}`
+    const proxyBody = buildProxyBody(contentType, body, settings, pathname)
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': contentType || 'application/json',
+        Accept: reqAccept,
+      },
+      body: proxyBody,
+      signal: controller.signal,
+    })
+    const responseBuffer = Buffer.from(await response.arrayBuffer())
+    const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
+    const parsed = parseProxyResponseBody(responseBuffer, responseType)
+
+    if (!response.ok) {
+      const detail = responseBuffer.toString('utf8').slice(0, 2000)
+      refundCredits(chargedCard, cost)
+      updateUsageLog(logId, 'refunded', detail)
+      touchProxyJob(job, {
+        status: 'error',
+        httpStatus: response.status,
+        contentType: responseType,
+        ...parsed,
+        errorMessage: detail,
+        balance: getCardsBalance(codes),
+      })
+      return
+    }
+
+    updateUsageLog(logId, 'success')
+    touchProxyJob(job, {
+      status: 'success',
+      httpStatus: response.status,
+      contentType: responseType,
+      ...parsed,
+      balance: getCardsBalance(codes),
+    })
+  } catch (err) {
+    refundCredits(chargedCard, cost)
+    const message = abortMessage || (err instanceof Error ? err.message : String(err))
+    updateUsageLog(logId, 'refunded', message)
+    touchProxyJob(job, {
+      status: 'error',
+      httpStatus: 502,
+      contentType: 'application/json; charset=utf-8',
+      body: { error: { message: createProxyErrorMessage('生图失败，次数已退回', message) } },
+      bodyText: '',
+      errorMessage: message,
+      balance: getCardsBalance(codes),
+    })
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
+function handleImageProxyTaskStatus(req, res, taskId) {
+  if (req.method !== 'GET') {
+    sendJson(res, 405, { error: { message: 'Method not allowed' } })
+    return
+  }
+  cleanupProxyJobs()
+  const job = proxyJobs.get(taskId)
+  if (!job) {
+    sendJson(res, 404, { ok: false, status: 'missing', error: { message: '任务不存在或已过期' } })
+    return
+  }
+
+  const payload = {
+    ok: job.status === 'success',
+    taskId: job.id,
+    status: job.status,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    balance: job.balance || getCardsBalance(job.codes || []),
+  }
+
+  if (job.status === 'success') {
+    sendJson(res, 200, {
+      ...payload,
+      httpStatus: job.httpStatus || 200,
+      contentType: job.contentType || 'application/json; charset=utf-8',
+      body: job.body,
+      bodyText: job.bodyText || '',
+    })
+    return
+  }
+
+  if (job.status === 'error') {
+    sendJson(res, 200, {
+      ...payload,
+      httpStatus: job.httpStatus || 502,
+      contentType: job.contentType || 'application/json; charset=utf-8',
+      body: job.body,
+      bodyText: job.bodyText || '',
+      error: { message: job.errorMessage || '生成失败，次数已退回' },
+    })
+    return
+  }
+
+  sendJson(res, 200, payload)
+}
+
 async function handleApi(req, res, pathname) {
   if (pathname === '/api/config' && req.method === 'GET') {
     const settings = getSettings()
@@ -659,8 +885,13 @@ const server = http.createServer(async (req, res) => {
       res.end()
       return
     }
+    const taskMatch = pathname.match(/^\/api-proxy\/tasks\/([^/]+)$/)
+    if (taskMatch) {
+      handleImageProxyTaskStatus(req, res, taskMatch[1])
+      return
+    }
     if (pathname.startsWith('/api-proxy/')) {
-      await handleImageProxy(req, res, pathname)
+      await handleImageProxyTaskMode(req, res, pathname)
       return
     }
     if (pathname.startsWith('/api/admin/')) {

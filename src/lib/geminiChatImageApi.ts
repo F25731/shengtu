@@ -11,6 +11,7 @@ import {
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
+  resolveYunYiTaskResponse,
 } from './imageApiShared'
 import { createCardsHeaderValue } from './cardClient'
 
@@ -160,7 +161,7 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
       ],
     }
 
-    const response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
+    let response = await fetch(buildApiUrl(profile.baseUrl, 'chat/completions', proxyConfig, useApiProxy), {
       method: 'POST',
       headers: {
         ...createRequestHeaders(profile),
@@ -170,6 +171,8 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
       body: JSON.stringify(body),
       signal: controller.signal,
     })
+
+    response = await resolveYunYiTaskResponse(response, controller.signal)
 
     if (!response.ok) {
       throw new Error(await getApiErrorMessage(response))

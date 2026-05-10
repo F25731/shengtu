@@ -162,6 +162,108 @@ export async function getApiErrorMessage(response: Response): Promise<string> {
   return errorMsg
 }
 
+type YunYiTaskStatus = 'pending' | 'running' | 'success' | 'error' | 'missing'
+
+interface YunYiTaskEnvelope {
+  ok?: boolean
+  taskId?: string
+  pollUrl?: string
+  status?: YunYiTaskStatus
+  httpStatus?: number
+  contentType?: string
+  body?: unknown
+  bodyText?: string
+  error?: { message?: string } | string
+}
+
+function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new DOMException('Aborted', 'AbortError'))
+      return
+    }
+    const timer = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer)
+      reject(new DOMException('Aborted', 'AbortError'))
+    }, { once: true })
+  })
+}
+
+function isYunYiTaskEnvelope(value: unknown): value is YunYiTaskEnvelope {
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  return typeof record.taskId === 'string' && typeof record.status === 'string'
+}
+
+function refreshYunYiBalance() {
+  if (typeof window !== 'undefined') window.__YUNYI_REFRESH_BALANCE__?.()
+}
+
+function responseFromYunYiTask(task: YunYiTaskEnvelope): Response {
+  const status = Number(task.httpStatus || (task.status === 'success' ? 200 : 502))
+  const contentType = task.contentType || 'application/json; charset=utf-8'
+  let text = ''
+  if (task.body !== undefined) text = JSON.stringify(task.body)
+  else if (typeof task.bodyText === 'string') text = task.bodyText
+  else {
+    const message = typeof task.error === 'string' ? task.error : task.error?.message || '生成失败，次数已退回'
+    text = JSON.stringify({ error: { message } })
+  }
+  return new Response(text, {
+    status,
+    headers: {
+      'Content-Type': contentType,
+      'Cache-Control': 'no-store',
+    },
+  })
+}
+
+export async function resolveYunYiTaskResponse(response: Response, signal?: AbortSignal): Promise<Response> {
+  if (response.status !== 202) return response
+
+  let task: YunYiTaskEnvelope
+  try {
+    const payload = await response.clone().json()
+    if (!isYunYiTaskEnvelope(payload)) return response
+    task = payload
+  } catch {
+    return response
+  }
+
+  refreshYunYiBalance()
+  const pollUrl = task.pollUrl || `/api-proxy/tasks/${encodeURIComponent(task.taskId || '')}`
+  let lastPollingError: unknown
+
+  for (;;) {
+    await wait(lastPollingError ? 2500 : 1800, signal)
+    let pollResponse: Response
+    try {
+      pollResponse = await fetch(`${pollUrl}${pollUrl.includes('?') ? '&' : '?'}_=${Date.now()}`, {
+        cache: 'no-store',
+        signal,
+      })
+    } catch (err) {
+      if (signal?.aborted) throw err
+      lastPollingError = err
+      continue
+    }
+
+    if (!pollResponse.ok) {
+      throw new Error(await getApiErrorMessage(pollResponse))
+    }
+
+    const next = await pollResponse.json() as YunYiTaskEnvelope
+    if (next.status === 'pending' || next.status === 'running') {
+      lastPollingError = undefined
+      continue
+    }
+
+    refreshYunYiBalance()
+    return responseFromYunYiTask(next)
+  }
+}
+
 export function pickActualParams(source: unknown): Partial<TaskParams> {
   if (!source || typeof source !== 'object') return {}
   const record = source as Record<string, unknown>
