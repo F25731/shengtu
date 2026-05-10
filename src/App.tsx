@@ -13,7 +13,6 @@ import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import CardGate from './components/CardGate'
 import AddCardModal from './components/AddCardModal'
-import PurchaseButton from './components/PurchaseButton'
 import { readCardBalance, readClientConfig, type CardBalance, type ClientConfig } from './lib/cardClient'
 
 export default function App() {
@@ -71,8 +70,8 @@ export default function App() {
 
   return (
     <>
-      <Header balance={balance} onAddCard={() => setShowAddCard(true)} />
-      <main data-home-main data-drag-select-surface className="pb-48">
+      <Header balance={balance} onAddCard={() => setShowAddCard(true)} purchaseUrl={clientConfig.purchaseUrl} />
+      <main data-home-main data-drag-select-surface className="pt-6 pb-48 sm:pt-8">
         <div className="safe-area-x max-w-7xl mx-auto">
           <TaskGrid />
         </div>
@@ -84,7 +83,6 @@ export default function App() {
       <Toast />
       <MaskEditorModal />
       <ImageContextMenu />
-      <PurchaseButton config={clientConfig} />
       {!cardReady && <CardGate onReady={() => {
         setCardReady(true)
         void refreshBalance()

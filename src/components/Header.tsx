@@ -3,9 +3,11 @@ import type { CardBalance } from '../lib/cardClient'
 export default function Header({
   balance,
   onAddCard,
+  purchaseUrl,
 }: {
   balance: CardBalance
   onAddCard: () => void
+  purchaseUrl?: string
 }) {
   return (
     <>
@@ -29,6 +31,21 @@ export default function Header({
               >
                 +
               </button>
+              {purchaseUrl && (
+                <button
+                  type="button"
+                  onClick={() => window.open(purchaseUrl, '_blank', 'noopener,noreferrer')}
+                  className="flex h-7 w-7 items-center justify-center rounded-full bg-orange-500 text-white shadow-[0_8px_22px_rgba(249,115,22,0.38)] transition hover:bg-orange-600"
+                  aria-label="购买卡密"
+                  title="购买卡密"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2.4} strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+                    <circle cx="9" cy="21" r="1" />
+                    <circle cx="20" cy="21" r="1" />
+                    <path d="M1 1h4l2.7 13.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L23 6H6" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
         </div>
