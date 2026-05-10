@@ -344,7 +344,6 @@ async function disableCard(code) {
 }
 
 async function deleteCard(code) {
-  if (!confirm(`删除 ${code}？删除后这个卡密将无法再使用。`)) return
   deletingCardCode = code
   loadCards()
   flashPageInfo('正在删除卡密...')
