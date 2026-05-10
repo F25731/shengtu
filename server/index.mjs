@@ -107,6 +107,7 @@ function initDatabase() {
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
     max_concurrent_generations: process.env.YUNYI_MAX_CONCURRENT_GENERATIONS || '20',
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
+    blocked_words: process.env.YUNYI_BLOCKED_WORDS || '',
   }
   for (const [key, value] of Object.entries(defaults)) {
     const existing = selectOne('SELECT key FROM settings WHERE key = ?', [key])
@@ -121,7 +122,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'blocked_words']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -415,6 +416,29 @@ function extractPrompt(contentType, body) {
   return ''
 }
 
+function parseBlockedWords(settings) {
+  return String(settings.blocked_words || '')
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => item && !item.startsWith('#'))
+}
+
+function normalizeBlockedText(value) {
+  return String(value || '').toLowerCase().replace(/\s+/g, '')
+}
+
+function findBlockedWord(prompt, settings) {
+  const rawPrompt = String(prompt || '').toLowerCase()
+  const compactPrompt = normalizeBlockedText(rawPrompt)
+  for (const word of parseBlockedWords(settings)) {
+    const lowerWord = word.toLowerCase()
+    const compactWord = normalizeBlockedText(word)
+    if (!compactWord) continue
+    if (rawPrompt.includes(lowerWord) || compactPrompt.includes(compactWord)) return word
+  }
+  return ''
+}
+
 function extractImageCount(contentType, body) {
   try {
     if (contentType.includes('application/json')) {
@@ -506,6 +530,7 @@ async function handleImageProxy(req, res, pathname) {
 
   const contentType = String(req.headers['content-type'] || '')
   const body = await readBody(req)
+  const prompt = extractPrompt(contentType, body)
   const imageCount = Math.max(1, extractImageCount(contentType, body))
   const cost = baseCost * imageCount
 
@@ -514,6 +539,16 @@ async function handleImageProxy(req, res, pathname) {
     sendJson(res, 402, { error: { message: '请先输入卡密' } })
     return
   }
+  const blockedWord = findBlockedWord(prompt, settings)
+  if (blockedWord) {
+    sendJson(res, 400, {
+      error: { message: '提示词包含平台不支持的内容，请调整后再提交' },
+      code: 'prompt_blocked',
+      balance: getCardsBalance(codes),
+    })
+    return
+  }
+
   const maxConcurrentJobs = getMaxConcurrentProxyJobs(settings)
   const activeJobs = getActiveProxyJobs()
   if (maxConcurrentJobs > 0 && activeJobs.length >= maxConcurrentJobs) {
@@ -551,7 +586,6 @@ async function handleImageProxy(req, res, pathname) {
     return
   }
 
-  const prompt = extractPrompt(contentType, body)
   const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
 
   const controller = new AbortController()
@@ -628,11 +662,22 @@ async function handleImageProxyTaskMode(req, res, pathname) {
 
   const contentType = String(req.headers['content-type'] || '')
   const body = await readBody(req)
+  const prompt = extractPrompt(contentType, body)
   const imageCount = Math.max(1, extractImageCount(contentType, body))
   const cost = baseCost * imageCount
   const codes = parseCardsHeader(req)
   if (!codes.length) {
     sendJson(res, 402, { error: { message: '请先输入卡密' } })
+    return
+  }
+
+  const blockedWord = findBlockedWord(prompt, settings)
+  if (blockedWord) {
+    sendJson(res, 400, {
+      error: { message: '提示词包含平台不支持的内容，请调整后再提交' },
+      code: 'prompt_blocked',
+      balance: getCardsBalance(codes),
+    })
     return
   }
 
@@ -673,7 +718,6 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     return
   }
 
-  const prompt = extractPrompt(contentType, body)
   const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
   const job = createProxyJob({ logId, chargedCard, codes, cost, prompt })
 

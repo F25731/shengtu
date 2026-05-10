@@ -177,6 +177,7 @@
         <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
         <label><span>最大同时生成任务数</span><input id="max_concurrent_generations" type="number" min="0" placeholder="20，0 表示不限制" /></label>
         <label class="wide"><span>首页公告</span><textarea id="announcement_text" placeholder="公告内容"></textarea></label>
+        <label class="wide"><span>提示词屏蔽词（一行一个）</span><textarea id="blocked_words" placeholder="例如：习近平&#10;政治人物姓名&#10;不想让用户提交的关键词"></textarea></label>
       </div>
       <div class="row" style="margin-top:18px">
         <button onclick="saveSettings()">保存设置</button>
@@ -266,14 +267,14 @@ function closeSettingsModal() {
 
 async function loadSettings() {
   const data = await api('/api/admin/settings')
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'blocked_words']) {
     document.getElementById(key).value = data[key] || ''
   }
 }
 
 async function saveSettings() {
   const payload = {}
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'blocked_words']) {
     payload[key] = document.getElementById(key).value
   }
   await api('/api/admin/settings', { method: 'POST', body: JSON.stringify(payload) })
