@@ -348,6 +348,29 @@ function createProxyErrorMessage(prefix, detail) {
   return text ? `${prefix}: ${text}` : prefix
 }
 
+const streamDisconnectedMessage = '连接中断或内容违规，请重试或更换提示词'
+
+function normalizeProxyErrorMessage(message) {
+  const text = String(message || '')
+  return text.toLowerCase().includes('stream disconnected before completion') ? streamDisconnectedMessage : text
+}
+
+function normalizeProxyParsedError(parsed, fallbackMessage) {
+  const friendlyMessage = normalizeProxyErrorMessage(fallbackMessage || parsed?.bodyText || '')
+  if (friendlyMessage === streamDisconnectedMessage) {
+    return {
+      body: { error: { message: friendlyMessage } },
+      bodyText: '',
+    }
+  }
+  return parsed
+}
+
+function buildRefundedProxyErrorMessage(message, prefix = '生图失败，次数已退回') {
+  const friendlyMessage = normalizeProxyErrorMessage(message)
+  return friendlyMessage === streamDisconnectedMessage ? friendlyMessage : createProxyErrorMessage(prefix, friendlyMessage)
+}
+
 function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
   res.writeHead(status, {
     'Content-Type': contentType,
@@ -423,18 +446,11 @@ function parseBlockedWords(settings) {
     .filter((item) => item && !item.startsWith('#'))
 }
 
-function normalizeBlockedText(value) {
-  return String(value || '').toLowerCase().replace(/\s+/g, '')
-}
-
 function findBlockedWord(prompt, settings) {
   const rawPrompt = String(prompt || '').toLowerCase()
-  const compactPrompt = normalizeBlockedText(rawPrompt)
   for (const word of parseBlockedWords(settings)) {
     const lowerWord = word.toLowerCase()
-    const compactWord = normalizeBlockedText(word)
-    if (!compactWord) continue
-    if (rawPrompt.includes(lowerWord) || compactPrompt.includes(compactWord)) return word
+    if (lowerWord && rawPrompt.includes(lowerWord)) return word
   }
   return ''
 }
@@ -618,11 +634,17 @@ async function handleImageProxy(req, res, pathname) {
       body: proxyBody,
       signal: controller.signal,
     })
-    const responseBuffer = Buffer.from(await response.arrayBuffer())
-    const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
+    let responseBuffer = Buffer.from(await response.arrayBuffer())
+    let responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
     if (!response.ok) {
+      const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
+      const detail = normalizeProxyErrorMessage(rawDetail)
       refundCredits(chargedCard, cost)
-      updateUsageLog(logId, 'refunded', responseBuffer.toString('utf8').slice(0, 2000))
+      updateUsageLog(logId, 'refunded', detail)
+      if (detail === streamDisconnectedMessage) {
+        responseType = 'application/json; charset=utf-8'
+        responseBuffer = Buffer.from(JSON.stringify({ error: { message: detail } }))
+      }
     } else {
       updateUsageLog(logId, 'success')
     }
@@ -635,11 +657,12 @@ async function handleImageProxy(req, res, pathname) {
     res.end(responseBuffer)
   } catch (err) {
     refundCredits(chargedCard, cost)
-    const message = abortMessage || (err instanceof Error ? err.message : String(err))
+    const message = normalizeProxyErrorMessage(abortMessage || (err instanceof Error ? err.message : String(err)))
     updateUsageLog(logId, 'refunded', message)
     if (!res.destroyed && !res.writableEnded) {
       responseCompleted = true
-      sendJson(res, 502, { error: { message: `生图失败，次数已退回：${message}` } })
+      sendJson(res, 502, { error: { message: buildRefundedProxyErrorMessage(message) } })
+      return
     }
   } finally {
     clearTimeout(timeoutId)
@@ -770,10 +793,12 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
     })
     const responseBuffer = Buffer.from(await response.arrayBuffer())
     const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
-    const parsed = parseProxyResponseBody(responseBuffer, responseType)
+    let parsed = parseProxyResponseBody(responseBuffer, responseType)
 
     if (!response.ok) {
-      const detail = responseBuffer.toString('utf8').slice(0, 2000)
+      const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
+      const detail = normalizeProxyErrorMessage(rawDetail)
+      parsed = normalizeProxyParsedError(parsed, rawDetail)
       refundCredits(chargedCard, cost)
       updateUsageLog(logId, 'refunded', detail)
       touchProxyJob(job, {
@@ -797,13 +822,13 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
     })
   } catch (err) {
     refundCredits(chargedCard, cost)
-    const message = abortMessage || (err instanceof Error ? err.message : String(err))
+    const message = normalizeProxyErrorMessage(abortMessage || (err instanceof Error ? err.message : String(err)))
     updateUsageLog(logId, 'refunded', message)
     touchProxyJob(job, {
       status: 'error',
       httpStatus: 502,
       contentType: 'application/json; charset=utf-8',
-      body: { error: { message: createProxyErrorMessage('生图失败，次数已退回', message) } },
+      body: { error: { message: buildRefundedProxyErrorMessage(message) } },
       bodyText: '',
       errorMessage: message,
       balance: getCardsBalance(codes),
