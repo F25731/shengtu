@@ -208,8 +208,11 @@ function authHeaders() {
 }
 
 async function api(path, options = {}) {
-  const res = await fetch(path, {
+  const method = String(options.method || 'GET').toUpperCase()
+  const url = method === 'GET' ? withCacheBust(path) : path
+  const res = await fetch(url, {
     ...options,
+    cache: 'no-store',
     headers: {
       'Content-Type': 'application/json',
       ...authHeaders(),
@@ -222,6 +225,11 @@ async function api(path, options = {}) {
     throw new Error(message)
   }
   return data
+}
+
+function withCacheBust(path) {
+  const separator = path.includes('?') ? '&' : '?'
+  return `${path}${separator}_=${Date.now()}`
 }
 
 async function login() {

@@ -255,13 +255,20 @@ function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
-    'Cache-Control': 'no-store',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
   })
   res.end(body)
 }
 
 function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
-  res.writeHead(status, { 'Content-Type': contentType, 'Cache-Control': 'no-store' })
+  res.writeHead(status, {
+    'Content-Type': contentType,
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+  })
   res.end(text)
 }
 
@@ -374,7 +381,12 @@ function serveStatic(req, res, pathname) {
     target = join(distRoot, 'index.html')
   }
   const type = mimeTypes[extname(target)] || 'application/octet-stream'
-  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' })
+  res.writeHead(200, {
+    'Content-Type': type,
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+    Pragma: 'no-cache',
+    Expires: '0',
+  })
   createReadStream(target).on('error', () => sendText(res, 404, 'Not found')).pipe(res)
 }
 
