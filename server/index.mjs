@@ -220,6 +220,37 @@ function updateUsageLog(id, status, errorMessage = '') {
   run('UPDATE usage_logs SET status = ?, error_message = ?, updated_at = ? WHERE id = ?', [status, errorMessage, nowIso(), id])
 }
 
+function getUsageStats() {
+  const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+  const total = selectOne(`
+    SELECT
+      SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) AS total,
+      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+      SUM(CASE WHEN status NOT IN ('success', 'pending') THEN 1 ELSE 0 END) AS failed
+    FROM usage_logs
+  `) || {}
+  const recent = selectOne(`
+    SELECT
+      SUM(CASE WHEN status != 'pending' THEN 1 ELSE 0 END) AS total,
+      SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success,
+      SUM(CASE WHEN status NOT IN ('success', 'pending') THEN 1 ELSE 0 END) AS failed
+    FROM usage_logs
+    WHERE created_at >= ?
+  `, [since24h]) || {}
+  const normalize = (row) => {
+    const totalCount = Number(row.total || 0)
+    const successCount = Number(row.success || 0)
+    const failedCount = Number(row.failed || 0)
+    return {
+      total: totalCount,
+      success: successCount,
+      failed: failedCount,
+      successRate: totalCount > 0 ? Math.round((successCount / totalCount) * 10000) / 100 : 0,
+    }
+  }
+  return { all: normalize(total), last24h: normalize(recent) }
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload)
   res.writeHead(status, {
@@ -282,6 +313,32 @@ function extractPrompt(contentType, body) {
   return ''
 }
 
+function extractImageCount(contentType, body) {
+  try {
+    if (contentType.includes('application/json')) {
+      const data = parseJsonBody(body)
+      const direct = Number(data.n)
+      if (Number.isFinite(direct) && direct > 0) return Math.floor(direct)
+      if (Array.isArray(data.tools)) {
+        for (const tool of data.tools) {
+          const toolCount = Number(tool?.n)
+          if (Number.isFinite(toolCount) && toolCount > 0) return Math.floor(toolCount)
+        }
+      }
+      return 1
+    }
+    if (contentType.includes('multipart/form-data')) {
+      const text = body.toString('utf8')
+      const match = text.match(/name="n"\r?\n\r?\n(\d+)/)
+      const count = Number(match?.[1])
+      if (Number.isFinite(count) && count > 0) return Math.floor(count)
+    }
+  } catch {
+    return 1
+  }
+  return 1
+}
+
 function buildProxyBody(contentType, body, settings, apiPath) {
   if (!contentType.includes('application/json')) return body
   try {
@@ -329,11 +386,16 @@ async function handleImageProxy(req, res, pathname) {
   const settings = getSettings()
   const apiKey = String(settings.backgrace_api_key || '').trim()
   const apiUrl = String(settings.backgrace_api_url || 'https://backgrace.com/v1').replace(/\/+$/, '')
-  const cost = Math.max(1, Number(settings.cost_per_generation || 1))
+  const baseCost = Math.max(1, Number(settings.cost_per_generation || 1))
   if (!apiKey) {
     sendJson(res, 503, { error: { message: '生图服务暂未完成后台配置' } })
     return
   }
+
+  const contentType = String(req.headers['content-type'] || '')
+  const body = await readBody(req)
+  const imageCount = Math.max(1, extractImageCount(contentType, body))
+  const cost = baseCost * imageCount
 
   const codes = parseCardsHeader(req)
   if (!codes.length) {
@@ -346,8 +408,6 @@ async function handleImageProxy(req, res, pathname) {
     return
   }
 
-  const contentType = String(req.headers['content-type'] || '')
-  const body = await readBody(req)
   const prompt = extractPrompt(contentType, body)
   const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
 
@@ -450,10 +510,32 @@ async function handleAdmin(req, res, pathname, searchParams) {
 
   if (pathname === '/api/admin/cards' && req.method === 'GET') {
     const q = String(searchParams.get('q') || '').trim()
-    const rows = q
-      ? selectAll('SELECT * FROM cards WHERE code LIKE ? OR batch_name LIKE ? ORDER BY created_at DESC LIMIT 500', [`%${q}%`, `%${q}%`])
-      : selectAll('SELECT * FROM cards ORDER BY created_at DESC LIMIT 500')
-    sendJson(res, 200, { cards: rows.map(publicCard) })
+    const status = String(searchParams.get('status') || 'all')
+    const page = Math.max(1, Number(searchParams.get('page') || 1))
+    const pageSize = Math.min(100, Math.max(1, Number(searchParams.get('pageSize') || 10)))
+    const where = []
+    const params = []
+    if (q) {
+      where.push('(code LIKE ? OR batch_name LIKE ?)')
+      params.push(`%${q}%`, `%${q}%`)
+    }
+    if (status === 'depleted') {
+      where.push('status != ? AND used_credits >= total_credits')
+      params.push('disabled')
+    } else if (status === 'available') {
+      where.push('status != ? AND used_credits < total_credits')
+      params.push('disabled')
+    } else if (status === 'disabled') {
+      where.push('status = ?')
+      params.push('disabled')
+    }
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const total = Number(selectOne(`SELECT COUNT(*) AS total FROM cards ${whereSql}`, params)?.total || 0)
+    const rows = selectAll(
+      `SELECT * FROM cards ${whereSql} ORDER BY created_at DESC LIMIT ? OFFSET ?`,
+      [...params, pageSize, (page - 1) * pageSize],
+    )
+    sendJson(res, 200, { cards: rows.map(publicCard), total, page, pageSize })
     return
   }
 
@@ -483,6 +565,17 @@ async function handleAdmin(req, res, pathname, searchParams) {
     const code = normalizeCardCode(decodeURIComponent(disableMatch[1]))
     run('UPDATE cards SET status = ?, updated_at = ? WHERE code = ?', ['disabled', nowIso(), code])
     sendJson(res, 200, { ok: true })
+    return
+  }
+
+  if (pathname === '/api/admin/stats' && req.method === 'GET') {
+    sendJson(res, 200, getUsageStats())
+    return
+  }
+
+  if (pathname === '/api/admin/failures' && req.method === 'GET') {
+    const rows = selectAll("SELECT * FROM usage_logs WHERE status NOT IN ('success', 'pending') ORDER BY created_at DESC LIMIT 300")
+    sendJson(res, 200, { logs: rows })
     return
   }
 

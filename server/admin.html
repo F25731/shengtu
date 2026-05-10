@@ -5,101 +5,199 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>云逸生图后台</title>
   <style>
-    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; background:#0b0c10; color:#f4f4f5; }
-    body { margin:0; padding:24px; }
-    main { max-width:1180px; margin:0 auto; }
-    h1 { margin:0 0 18px; font-size:26px; }
-    section { background:#15161b; border:1px solid #272a33; border-radius:12px; padding:18px; margin:14px 0; }
-    input, button { font:inherit; }
-    input { background:#0f1014; color:#fff; border:1px solid #30333d; border-radius:8px; padding:10px 12px; outline:none; }
-    input:focus { border-color:#3b82f6; }
-    button { border:0; border-radius:8px; padding:10px 14px; background:#2563eb; color:#fff; cursor:pointer; font-weight:600; }
-    button.secondary { background:#272a33; }
-    button.danger { background:#b91c1c; }
-    .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
-    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
-    label { display:flex; flex-direction:column; gap:6px; color:#a1a1aa; font-size:13px; }
-    label span { color:#a1a1aa; }
+    :root { color-scheme: dark; font-family: Inter, "Microsoft YaHei", system-ui, sans-serif; background:#07080b; color:#f7f7fb; }
+    * { box-sizing:border-box; }
+    body { margin:0; min-height:100vh; background:#07080b; }
+    button, input, select, textarea { font:inherit; }
+    button { border:0; border-radius:10px; padding:10px 14px; background:#2f6df6; color:#fff; cursor:pointer; font-weight:700; transition:.16s ease; }
+    button:hover { filter:brightness(1.08); }
+    button.secondary { background:#23262f; color:#e5e7eb; border:1px solid #333744; }
+    button.danger { background:#3a1719; color:#ff7777; border:1px solid #702328; }
+    button.ghost { background:transparent; color:#a1a1aa; border:1px solid #2b2f38; }
+    input, select, textarea { width:100%; border:1px solid #2c303a; border-radius:10px; background:#0d0f14; color:#fff; padding:11px 12px; outline:none; }
+    input:focus, select:focus, textarea:focus { border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,.12); }
+    textarea { min-height:112px; resize:vertical; }
+    main { max-width:1240px; margin:0 auto; padding:28px 22px 48px; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:22px; }
+    h1 { margin:0; font-size:28px; letter-spacing:.02em; }
+    h2 { margin:0 0 16px; font-size:18px; }
+    .sub { margin:7px 0 0; color:#8f96a3; font-size:13px; }
+    .panel { background:#14161c; border:1px solid #272b35; border-radius:16px; padding:20px; box-shadow:0 18px 60px rgba(0,0,0,.22); }
+    .login { max-width:460px; margin:16vh auto 0; }
+    .hidden { display:none !important; }
+    .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .grid { display:grid; gap:14px; }
+    .stats { grid-template-columns:repeat(4,minmax(0,1fr)); margin-bottom:16px; }
+    .stat { background:#111319; border:1px solid #242833; border-radius:14px; padding:16px; min-height:98px; }
+    .stat.clickable { cursor:pointer; }
+    .stat-label { color:#8f96a3; font-size:13px; }
+    .stat-value { margin-top:10px; font-size:26px; font-weight:800; }
+    .stat-note { margin-top:6px; color:#6f7785; font-size:12px; }
+    .two-col { grid-template-columns:minmax(280px,.85fr) minmax(460px,1.5fr); align-items:start; }
+    label { display:flex; flex-direction:column; gap:7px; color:#a8afbd; font-size:13px; }
+    .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .toolbar { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-bottom:12px; }
+    .filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+    .filters input { width:260px; }
+    .filters select { width:130px; }
     table { width:100%; border-collapse:collapse; font-size:13px; }
-    th, td { text-align:left; border-bottom:1px solid #272a33; padding:10px 8px; vertical-align:top; }
-    th { color:#a1a1aa; font-weight:600; }
-    code { background:#272a33; padding:3px 6px; border-radius:6px; }
-    .hidden { display:none; }
-    .muted { color:#a1a1aa; }
+    th, td { padding:12px 10px; border-bottom:1px solid #252934; text-align:left; vertical-align:middle; }
+    th { color:#8f96a3; font-weight:700; white-space:nowrap; }
+    code { display:inline-block; border-radius:8px; background:#222631; color:#e5e7eb; padding:4px 7px; }
+    .status { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; font-size:12px; font-weight:700; }
+    .status.active { background:rgba(34,197,94,.13); color:#4ade80; }
+    .status.depleted { background:rgba(245,158,11,.14); color:#fbbf24; }
+    .status.disabled { background:rgba(239,68,68,.13); color:#f87171; }
+    .pager { display:flex; justify-content:flex-end; align-items:center; gap:10px; padding-top:14px; color:#9ca3af; font-size:13px; }
+    .modal-backdrop { position:fixed; inset:0; z-index:50; display:flex; align-items:center; justify-content:center; padding:22px; background:rgba(0,0,0,.58); backdrop-filter:blur(10px); }
+    .modal { width:min(760px,100%); max-height:88vh; overflow:auto; border:1px solid #303542; border-radius:18px; background:#15171d; box-shadow:0 26px 90px rgba(0,0,0,.45); }
+    .modal-head { position:sticky; top:0; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:18px 20px; background:#15171d; border-bottom:1px solid #292d38; }
+    .modal-body { padding:20px; }
+    .log-item { border:1px solid #292d38; border-radius:12px; padding:14px; margin-bottom:10px; background:#101218; }
+    .log-meta { display:flex; gap:10px; flex-wrap:wrap; color:#a1a1aa; font-size:12px; margin-bottom:8px; }
+    .log-error { white-space:pre-wrap; color:#fca5a5; font-size:13px; line-height:1.55; }
+    .muted { color:#8f96a3; }
     .ok { color:#22c55e; }
-    .warn { color:#f59e0b; }
     .err { color:#ef4444; }
-    textarea { width:100%; min-height:120px; background:#0f1014; color:#fff; border:1px solid #30333d; border-radius:8px; padding:10px; }
+    @media (max-width:900px) {
+      main { padding:20px 14px 40px; }
+      .stats, .two-col, .form-grid { grid-template-columns:1fr; }
+      .toolbar { align-items:flex-start; flex-direction:column; }
+      .filters input, .filters select { width:100%; }
+      table { min-width:760px; }
+      .table-wrap { overflow:auto; }
+    }
   </style>
 </head>
 <body>
 <main>
-  <h1>云逸生图后台</h1>
-
-  <section id="loginPanel">
-    <h2>登录</h2>
-    <div class="row">
-      <input id="password" type="password" placeholder="后台密码" />
+  <section id="loginPanel" class="panel login">
+    <h1>云逸生图后台</h1>
+    <p class="sub">请输入后台密码进入管理面板。</p>
+    <div class="row" style="margin-top:18px">
+      <input id="password" type="password" placeholder="后台密码" style="flex:1;min-width:220px" />
       <button onclick="login()">进入后台</button>
     </div>
-    <p class="muted">默认密码来自环境变量 <code>YUNYI_ADMIN_PASSWORD</code>。</p>
   </section>
 
   <div id="adminPanel" class="hidden">
-    <section>
-      <h2>系统设置</h2>
-      <div class="grid">
-        <label><span>购买卡密链接</span><input id="purchase_url" placeholder="https://..." /></label>
-        <label><span>BackGrace API URL</span><input id="backgrace_api_url" /></label>
-        <label><span>BackGrace API Key</span><input id="backgrace_api_key" placeholder="留空不修改" /></label>
-        <label><span>模型</span><input id="image_model" /></label>
-        <label><span>每次生图消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
+    <div class="topbar">
+      <div>
+        <h1>云逸生图后台</h1>
+        <p class="sub">卡密、消耗和失败记录集中管理。</p>
       </div>
-      <p><button onclick="saveSettings()">保存设置</button> <span id="settingsMsg" class="muted"></span></p>
-    </section>
+      <button class="secondary" onclick="openSettingsModal()">系统配置</button>
+    </div>
 
-    <section>
-      <h2>生成卡密</h2>
-      <div class="row">
-        <input id="batchName" placeholder="批次名，例如 100次卡" />
-        <input id="credits" type="number" min="1" value="100" placeholder="每张次数" />
-        <input id="count" type="number" min="1" max="5000" value="10" placeholder="生成数量" />
-        <button onclick="generateCards()">生成</button>
+    <div class="grid stats">
+      <div class="stat">
+        <div class="stat-label">累计生成</div>
+        <div id="statTotal" class="stat-value">0</div>
+        <div id="statTotal24h" class="stat-note">24小时内 0</div>
       </div>
-      <textarea id="generatedCodes" placeholder="生成后的卡密会出现在这里，直接复制到你的卡网商品里"></textarea>
-    </section>
+      <div class="stat">
+        <div class="stat-label">成功次数</div>
+        <div id="statSuccess" class="stat-value ok">0</div>
+        <div id="statSuccess24h" class="stat-note">24小时内 0</div>
+      </div>
+      <div class="stat clickable" onclick="openFailureModal()">
+        <div class="stat-label">失败次数</div>
+        <div id="statFailed" class="stat-value err">0</div>
+        <div id="statFailed24h" class="stat-note">点击查看失败日志</div>
+      </div>
+      <div class="stat">
+        <div class="stat-label">成功率</div>
+        <div id="statRate" class="stat-value">0%</div>
+        <div id="statRate24h" class="stat-note">24小时内 0%</div>
+      </div>
+    </div>
 
-    <section>
-      <div class="row">
-        <h2 style="margin-right:auto">卡密列表</h2>
-        <input id="cardSearch" placeholder="搜索卡密/批次" />
-        <button class="secondary" onclick="loadCards()">刷新</button>
-      </div>
-      <div style="overflow:auto">
-        <table>
-          <thead><tr><th>卡密</th><th>批次</th><th>总次数</th><th>已用</th><th>剩余</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
-          <tbody id="cardsBody"></tbody>
-        </table>
-      </div>
-    </section>
+    <div class="grid two-col">
+      <section class="panel">
+        <h2>生成卡密</h2>
+        <div class="grid">
+          <label><span>批次名</span><input id="batchName" placeholder="例如 100次卡" /></label>
+          <div class="form-grid grid">
+            <label><span>每张次数</span><input id="credits" type="number" min="1" value="100" /></label>
+            <label><span>生成数量</span><input id="count" type="number" min="1" max="5000" value="10" /></label>
+          </div>
+          <button onclick="generateCards()">生成卡密</button>
+          <label><span>本次生成结果</span><textarea id="generatedCodes" placeholder="生成后的卡密会出现在这里，也会自动进入右侧卡密列表"></textarea></label>
+        </div>
+      </section>
 
-    <section>
-      <div class="row">
-        <h2 style="margin-right:auto">使用日志</h2>
-        <button class="secondary" onclick="loadLogs()">刷新</button>
-      </div>
-      <div style="overflow:auto">
-        <table>
-          <thead><tr><th>时间</th><th>卡密</th><th>消耗</th><th>状态</th><th>提示词/错误</th></tr></thead>
-          <tbody id="logsBody"></tbody>
-        </table>
-      </div>
-    </section>
+      <section class="panel">
+        <div class="toolbar">
+          <h2>卡密列表</h2>
+          <div class="filters">
+            <input id="cardSearch" placeholder="搜索卡密/批次" onkeydown="if(event.key==='Enter'){cardPage=1;loadCards()}" />
+            <select id="cardStatus" onchange="cardPage=1;loadCards()">
+              <option value="all">全部</option>
+              <option value="available">未用完</option>
+              <option value="depleted">已用完</option>
+              <option value="disabled">已禁用</option>
+            </select>
+            <button class="secondary" onclick="cardPage=1;loadCards()">筛选</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>卡密</th><th>批次</th><th>总次数</th><th>已用</th><th>剩余</th><th>状态</th><th>创建时间</th><th>操作</th></tr>
+            </thead>
+            <tbody id="cardsBody"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <button class="ghost" onclick="prevCardPage()">上一页</button>
+          <span id="cardPageInfo">第 1 页</span>
+          <button class="ghost" onclick="nextCardPage()">下一页</button>
+        </div>
+      </section>
+    </div>
   </div>
 </main>
 
+<div id="settingsModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>系统配置</h2>
+      <button class="ghost" onclick="closeSettingsModal()">关闭</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-grid grid">
+        <label><span>购买卡密链接</span><input id="purchase_url" placeholder="https://..." /></label>
+        <label><span>BackGrace API URL</span><input id="backgrace_api_url" placeholder="https://backgrace.com/v1" /></label>
+        <label><span>BackGrace API Key</span><input id="backgrace_api_key" placeholder="留空不修改" /></label>
+        <label><span>模型</span><input id="image_model" placeholder="gpt-image-2" /></label>
+        <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
+      </div>
+      <div class="row" style="margin-top:18px">
+        <button onclick="saveSettings()">保存设置</button>
+        <span id="settingsMsg" class="muted"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="failureModal" class="modal-backdrop hidden">
+  <div class="modal">
+    <div class="modal-head">
+      <h2>失败日志</h2>
+      <div class="row">
+        <button class="secondary" onclick="loadFailures()">刷新</button>
+        <button class="ghost" onclick="closeFailureModal()">关闭</button>
+      </div>
+    </div>
+    <div id="failureBody" class="modal-body"></div>
+  </div>
+</div>
+
 <script>
 let token = localStorage.getItem('yunyi_admin_token') || ''
+let cardPage = 1
+let cardTotal = 0
+const cardPageSize = 10
 
 function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -115,7 +213,10 @@ async function api(path, options = {}) {
     },
   })
   const data = await res.json().catch(() => ({}))
-  if (!res.ok) throw new Error(data.error || data.message || '请求失败')
+  if (!res.ok) {
+    const message = typeof data.error === 'string' ? data.error : data.error?.message || data.message || '请求失败'
+    throw new Error(message)
+  }
   return data
 }
 
@@ -136,9 +237,15 @@ async function login() {
 async function showAdmin() {
   document.getElementById('loginPanel').classList.add('hidden')
   document.getElementById('adminPanel').classList.remove('hidden')
-  await loadSettings()
-  await loadCards()
-  await loadLogs()
+  await Promise.all([loadSettings(), loadStats(), loadCards()])
+}
+
+function openSettingsModal() {
+  document.getElementById('settingsModal').classList.remove('hidden')
+}
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').classList.add('hidden')
 }
 
 async function loadSettings() {
@@ -158,6 +265,18 @@ async function saveSettings() {
   setTimeout(() => document.getElementById('settingsMsg').textContent = '', 1800)
 }
 
+async function loadStats() {
+  const data = await api('/api/admin/stats')
+  document.getElementById('statTotal').textContent = data.all.total
+  document.getElementById('statTotal24h').textContent = `24小时内 ${data.last24h.total}`
+  document.getElementById('statSuccess').textContent = data.all.success
+  document.getElementById('statSuccess24h').textContent = `24小时内 ${data.last24h.success}`
+  document.getElementById('statFailed').textContent = data.all.failed
+  document.getElementById('statFailed24h').textContent = `24小时内 ${data.last24h.failed}，点击查看失败日志`
+  document.getElementById('statRate').textContent = `${data.all.successRate}%`
+  document.getElementById('statRate24h').textContent = `24小时内 ${data.last24h.successRate}%`
+}
+
 async function generateCards() {
   const data = await api('/api/admin/cards/generate', {
     method: 'POST',
@@ -168,24 +287,43 @@ async function generateCards() {
     }),
   })
   document.getElementById('generatedCodes').value = data.codes.join('\n')
+  cardPage = 1
   await loadCards()
 }
 
 async function loadCards() {
   const q = encodeURIComponent(document.getElementById('cardSearch')?.value || '')
-  const data = await api(`/api/admin/cards?q=${q}`)
-  document.getElementById('cardsBody').innerHTML = data.cards.map(card => `
+  const status = encodeURIComponent(document.getElementById('cardStatus')?.value || 'all')
+  const data = await api(`/api/admin/cards?q=${q}&status=${status}&page=${cardPage}&pageSize=${cardPageSize}`)
+  cardTotal = data.total || 0
+  const cards = data.cards || []
+  document.getElementById('cardsBody').innerHTML = cards.length ? cards.map(card => `
     <tr>
-      <td><code>${card.code}</code></td>
-      <td>${card.batchName || ''}</td>
+      <td><code>${escapeHtml(card.code)}</code></td>
+      <td>${escapeHtml(card.batchName || '')}</td>
       <td>${card.totalCredits}</td>
       <td>${card.usedCredits}</td>
       <td>${card.remainingCredits}</td>
-      <td class="${card.status === 'active' ? 'ok' : card.status === 'depleted' ? 'warn' : 'err'}">${card.status}</td>
+      <td><span class="status ${card.status}">${statusLabel(card.status)}</span></td>
       <td>${formatTime(card.createdAt)}</td>
-      <td><button class="danger" onclick="disableCard('${card.code}')">禁用</button></td>
+      <td><button class="danger" onclick="disableCard('${escapeAttr(card.code)}')">禁用</button></td>
     </tr>
-  `).join('')
+  `).join('') : '<tr><td colspan="8" class="muted">暂无卡密</td></tr>'
+  const totalPages = Math.max(1, Math.ceil(cardTotal / cardPageSize))
+  document.getElementById('cardPageInfo').textContent = `第 ${cardPage} / ${totalPages} 页，共 ${cardTotal} 条`
+}
+
+function prevCardPage() {
+  if (cardPage <= 1) return
+  cardPage -= 1
+  loadCards()
+}
+
+function nextCardPage() {
+  const totalPages = Math.max(1, Math.ceil(cardTotal / cardPageSize))
+  if (cardPage >= totalPages) return
+  cardPage += 1
+  loadCards()
 }
 
 async function disableCard(code) {
@@ -194,17 +332,37 @@ async function disableCard(code) {
   await loadCards()
 }
 
-async function loadLogs() {
-  const data = await api('/api/admin/logs')
-  document.getElementById('logsBody').innerHTML = data.logs.map(log => `
-    <tr>
-      <td>${formatTime(log.created_at)}</td>
-      <td><code>${log.card_code || ''}</code></td>
-      <td>${log.cost_credits}</td>
-      <td>${log.status}</td>
-      <td>${escapeHtml(log.error_message || log.prompt || '')}</td>
-    </tr>
-  `).join('')
+function openFailureModal() {
+  document.getElementById('failureModal').classList.remove('hidden')
+  loadFailures()
+}
+
+function closeFailureModal() {
+  document.getElementById('failureModal').classList.add('hidden')
+}
+
+async function loadFailures() {
+  const data = await api('/api/admin/failures')
+  const logs = data.logs || []
+  document.getElementById('failureBody').innerHTML = logs.length ? logs.map(log => `
+    <div class="log-item">
+      <div class="log-meta">
+        <span>${formatTime(log.created_at)}</span>
+        <span>卡密：<code>${escapeHtml(log.card_code || '')}</code></span>
+        <span>消耗：${log.cost_credits}</span>
+        <span>状态：${escapeHtml(log.status)}</span>
+      </div>
+      <div class="muted" style="margin-bottom:8px">提示词：${escapeHtml(log.prompt || '')}</div>
+      <div class="log-error">${escapeHtml(log.error_message || '无错误详情')}</div>
+    </div>
+  `).join('') : '<p class="muted">暂无失败日志</p>'
+}
+
+function statusLabel(status) {
+  if (status === 'active') return '未用完'
+  if (status === 'depleted') return '已用完'
+  if (status === 'disabled') return '已禁用'
+  return status
 }
 
 function formatTime(value) {
@@ -213,6 +371,10 @@ function formatTime(value) {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, ch => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[ch]))
+}
+
+function escapeAttr(value) {
+  return escapeHtml(value).replace(/`/g, '&#096;')
 }
 
 if (token) showAdmin().catch(() => {
