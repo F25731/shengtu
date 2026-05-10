@@ -391,6 +391,11 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
   const isBackGraceImageProfile = provider === 'openai' &&
     (baseUrl.trim() === '' || baseUrl.trim().replace(/\/+$/, '').toLowerCase() === 'https://backgrace.com/v1') &&
     model.trim() === DEFAULT_IMAGES_MODEL
+  const apiKey = isBackGraceImageProfile
+    ? defaults.apiKey
+    : typeof record.apiKey === 'string'
+    ? record.apiKey
+    : defaults.apiKey
 
   return {
     ...defaults,
@@ -398,12 +403,12 @@ export function normalizeApiProfile(input: unknown, fallback?: Partial<ApiProfil
     name: typeof record.name === 'string' && record.name.trim() ? record.name : defaults.name,
     provider,
     baseUrl,
-    apiKey: typeof record.apiKey === 'string' ? record.apiKey : defaults.apiKey,
+    apiKey,
     model,
     timeout: typeof record.timeout === 'number' && Number.isFinite(record.timeout) ? record.timeout : defaults.timeout,
     apiMode,
     codexCli: isBackGraceImageProfile ? true : Boolean(record.codexCli),
-    apiProxy: typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
+    apiProxy: isBackGraceImageProfile ? true : typeof record.apiProxy === 'boolean' ? record.apiProxy : defaults.apiProxy,
     responseFormatB64Json: isBackGraceImageProfile ? true : record.responseFormatB64Json === false ? undefined : defaults.responseFormatB64Json,
     providerDrafts: normalizeProviderDrafts(record.providerDrafts, customProviderIds),
   }

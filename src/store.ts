@@ -569,6 +569,47 @@ function genId(): string {
   return Date.now().toString(36) + (++uid).toString(36) + Math.random().toString(36).slice(2, 6)
 }
 
+const EDIT_CONTEXT_LIMIT = 6
+const EDIT_PROMPT_MAX_CHARS = 420
+
+function compactPromptForContext(prompt: string) {
+  const compact = prompt.replace(/\s+/g, ' ').trim()
+  if (compact.length <= EDIT_PROMPT_MAX_CHARS) return compact
+  return `${compact.slice(0, EDIT_PROMPT_MAX_CHARS - 1)}…`
+}
+
+function getEditParentTask(inputImages: InputImage[], tasks: TaskRecord[]) {
+  if (inputImages.length !== 1) return null
+  const imageId = inputImages[0]?.id
+  if (!imageId) return null
+  return tasks.find((task) => task.status === 'done' && task.outputImages?.includes(imageId)) ?? null
+}
+
+function getEditContextPrompts(parentTask: TaskRecord | null) {
+  if (!parentTask) return []
+  const prompts = [
+    ...(parentTask.editContextPrompts ?? []),
+    parentTask.prompt,
+  ]
+    .map(compactPromptForContext)
+    .filter(Boolean)
+  return prompts.slice(-EDIT_CONTEXT_LIMIT)
+}
+
+function buildContextualEditPrompt(historyPrompts: string[], currentPrompt: string) {
+  const instruction = currentPrompt.trim()
+  if (!historyPrompts.length) return instruction
+  const history = historyPrompts.map((item, index) => `${index + 1}. ${item}`).join('\n')
+  return [
+    '这是一张正在连续修改的图片。请基于参考图继续编辑，不要把画面当成全新图片重做。',
+    '历史创作要求：',
+    history,
+    '当前修改要求：',
+    instruction,
+    '请优先保持参考图中已经确定的主体、构图、风格、文字和细节，只改变当前修改要求明确提到的部分。',
+  ].join('\n')
+}
+
 export function getCodexCliPromptKey(settings: AppSettings): string {
   const profile = getActiveApiProfile(settings)
   return `${profile.baseUrl}\n${profile.apiKey}`
@@ -1073,10 +1114,17 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     useStore.getState().setParams(normalizedParamPatch)
   }
 
+  const latestTasks = useStore.getState().tasks
+  const parentTask = getEditParentTask(orderedInputImages, latestTasks)
+  const editContextPrompts = getEditContextPrompts(parentTask)
+  const apiPrompt = buildContextualEditPrompt(editContextPrompts, prompt.trim())
   const taskId = genId()
   const task: TaskRecord = {
     id: taskId,
     prompt: prompt.trim(),
+    ...(apiPrompt !== prompt.trim() ? { apiPrompt } : {}),
+    ...(editContextPrompts.length ? { editContextPrompts } : {}),
+    ...(parentTask ? { parentTaskId: parentTask.id, parentOutputImageId: orderedInputImages[0].id } : {}),
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -1093,7 +1141,6 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     elapsed: null,
   }
 
-  const latestTasks = useStore.getState().tasks
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
 
@@ -1153,7 +1200,7 @@ async function executeTask(taskId: string) {
 
     const result = await callImageApi({
       settings: requestSettings,
-      prompt: task.prompt,
+      prompt: task.apiPrompt ?? task.prompt,
       params: task.params,
       inputImageDataUrls: inputDataUrls,
       maskDataUrl,
@@ -1202,8 +1249,9 @@ async function executeTask(taskId: string) {
       if (imgId && revisedPrompt && revisedPrompt.trim()) acc[imgId] = revisedPrompt
       return acc
     }, {}) : undefined
+    const sentPrompt = (task.apiPrompt ?? task.prompt).trim()
     const promptWasRevised = shouldStoreRevisedPrompts && result.revisedPrompts?.some(
-      (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== task.prompt.trim(),
+      (revisedPrompt) => revisedPrompt?.trim() && revisedPrompt.trim() !== sentPrompt,
     )
     const hasRevisedPromptValue = shouldStoreRevisedPrompts && result.revisedPrompts?.some((revisedPrompt) => revisedPrompt?.trim())
     if (taskProvider === 'openai' && !activeProfile.codexCli) {
@@ -1315,6 +1363,10 @@ export async function retryTask(task: TaskRecord) {
   const newTask: TaskRecord = {
     id: taskId,
     prompt: task.prompt,
+    apiPrompt: task.apiPrompt,
+    editContextPrompts: task.editContextPrompts ? [...task.editContextPrompts] : undefined,
+    parentTaskId: task.parentTaskId,
+    parentOutputImageId: task.parentOutputImageId,
     params: normalizedParams,
     apiProvider: activeProfile.provider,
     apiProfileId: activeProfile.id,
@@ -1403,21 +1455,22 @@ export async function reuseConfig(task: TaskRecord) {
 }
 
 /** 编辑输出：将输出图加入输入 */
-export async function editOutputs(task: TaskRecord) {
-  const { inputImages, addInputImage, showToast, setPrompt } = useStore.getState()
+export async function editOutputs(task: TaskRecord, outputImageId?: string) {
+  const { inputImages, setInputImages, showToast, setPrompt } = useStore.getState()
   if (!task.outputImages?.length) return
 
-  let added = 0
-  for (const imgId of task.outputImages) {
-    if (inputImages.find((i) => i.id === imgId)) continue
-    const dataUrl = await ensureImageCached(imgId)
-    if (dataUrl) {
-      addInputImage({ id: imgId, dataUrl })
-      added++
-    }
+  const imgId = outputImageId && task.outputImages.includes(outputImageId)
+    ? outputImageId
+    : task.outputImages[0]
+  if (!imgId) return
+  const dataUrl = inputImages.find((img) => img.id === imgId)?.dataUrl ?? await ensureImageCached(imgId)
+  if (!dataUrl) {
+    showToast('找不到这张结果图，无法继续修改', 'error')
+    return
   }
+  setInputImages([{ id: imgId, dataUrl }])
   setPrompt('')
-  showToast(`已把 ${added} 张结果图放入输入区，可以继续输入修改要求`, 'success')
+  showToast('已把这张结果图放入输入区，可以继续输入修改要求', 'success')
 }
 
 /** 删除多条任务 */

@@ -128,6 +128,14 @@ export type TaskStatus = 'running' | 'done' | 'error'
 export interface TaskRecord {
   id: string
   prompt: string
+  /** The prompt actually sent to the image API when edit context is injected. */
+  apiPrompt?: string
+  /** Previous user instructions in the same image edit chain. */
+  editContextPrompts?: string[]
+  /** Parent task used when continuing from a generated image. */
+  parentTaskId?: string
+  /** Output image from the parent task that became this task's reference image. */
+  parentOutputImageId?: string
   params: TaskParams
   /** 生成时使用的 Provider 类型 */
   apiProvider?: ApiProvider

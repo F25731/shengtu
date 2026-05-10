@@ -182,7 +182,8 @@ export default function DetailModal() {
   const currentImageSize = currentOutputImageId ? imageSizes[currentOutputImageId] : ''
   const currentActualParams = currentOutputImageId ? task.actualParamsByImage?.[currentOutputImageId] : undefined
   const currentRevisedPrompt = currentOutputImageId ? task.revisedPromptByImage?.[currentOutputImageId]?.trim() : ''
-  const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== task.prompt.trim())
+  const sentPrompt = (task.apiPrompt ?? task.prompt).trim()
+  const showRevisedPrompt = Boolean(currentRevisedPrompt && currentRevisedPrompt !== sentPrompt)
   const codexCliPromptKey = getCodexCliPromptKey(settings)
   const hasHandledPromptWarning = settings.codexCli || dismissedCodexCliPrompts.includes(codexCliPromptKey)
   const taskProvider = task.apiProvider
@@ -217,7 +218,7 @@ export default function DetailModal() {
   }
 
   const handleEdit = () => {
-    editOutputs(task)
+    editOutputs(task, currentOutputImageId || undefined)
     setDetailTaskId(null)
   }
 

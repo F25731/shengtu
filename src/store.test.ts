@@ -5,6 +5,7 @@ import type { TaskRecord } from './types'
 import { editOutputs, getPersistedState, getTaskApiProfile, markInterruptedOpenAIRunningTasks, reuseConfig, submitTask, useStore } from './store'
 
 const imageA = { id: 'image-a', dataUrl: 'data:image/png;base64,a' }
+const imageB = { id: 'image-b', dataUrl: 'data:image/png;base64,b' }
 
 function task(overrides: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -59,6 +60,18 @@ describe('mask draft lifecycle in store actions', () => {
     await editOutputs(task({ outputImages: [imageA.id] }))
 
     expect(useStore.getState().maskDraft).toEqual(maskDraft)
+  })
+
+  it('continues from only the selected output image', async () => {
+    useStore.setState({
+      inputImages: [imageA, imageB],
+      maskDraft: null,
+    })
+
+    await editOutputs(task({ outputImages: [imageA.id, imageB.id] }), imageB.id)
+
+    expect(useStore.getState().inputImages).toEqual([imageB])
+    expect(useStore.getState().prompt).toBe('')
   })
 
   it('clears an invalid mask draft when submit cannot find the mask target image', async () => {
