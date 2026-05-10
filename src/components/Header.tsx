@@ -9,6 +9,19 @@ export default function Header({
   onAddCard: () => void
   purchaseUrl?: string
 }) {
+  const hasBusyCard = Boolean(balance.hasBusyCard || balance.cards.some((card) => card.busy))
+  const hasUsableCard = balance.cards.some((card) => card.status === 'active' && card.remainingCredits > 0)
+  const cardStatusClass = hasBusyCard
+    ? 'bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.8)]'
+    : hasUsableCard
+      ? 'bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.75)]'
+      : 'bg-gray-400 dark:bg-gray-500'
+  const cardStatusTitle = hasBusyCard
+    ? '当前卡密有任务正在生成'
+    : hasUsableCard
+      ? '当前卡密可用'
+      : '当前卡密暂无可用次数'
+
   return (
     <>
       <header data-no-drag-select className="safe-area-top fixed top-0 left-0 right-0 z-40 bg-white/85 dark:bg-gray-950/85 backdrop-blur border-b border-gray-200 dark:border-white/[0.08]">
@@ -46,6 +59,13 @@ export default function Header({
                   </svg>
                 </button>
               )}
+              <div
+                className="flex h-7 items-center gap-1.5 rounded-full bg-gray-100 px-2.5 text-xs font-medium text-gray-600 dark:bg-white/[0.06] dark:text-gray-300"
+                title={cardStatusTitle}
+              >
+                <span>卡密情况</span>
+                <span className={`h-2 w-2 rounded-full ${cardStatusClass}`} aria-hidden="true" />
+              </div>
             </div>
           </div>
         </div>

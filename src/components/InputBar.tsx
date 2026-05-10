@@ -217,14 +217,24 @@ export default function InputBar() {
       : normalizeSettings({ ...settings, activeProfileId: activeProfile.id })
   ), [activeProfile.id, currentActiveProfile.id, settings])
   const hasSubmitApiConfig = Boolean(activeProfile.apiKey)
-  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig)
+  const hasRunningTask = tasks.some((task) => task.status === 'running')
+  const canSubmit = Boolean(prompt.trim() && hasSubmitApiConfig && !hasRunningTask)
+  const submitTooltipText = !hasSubmitApiConfig
+    ? '生图服务暂未完成后台配置'
+    : hasRunningTask
+      ? '当前已有图片正在生成，请完成后再提交'
+      : ''
   const handleSubmitClick = useCallback(() => {
     if (!hasSubmitApiConfig) {
       showToast('生图服务暂未完成后台配置，请稍后再试', 'error')
       return
     }
+    if (hasRunningTask) {
+      showToast('当前已有图片正在生成，请完成后再提交', 'info')
+      return
+    }
     void submitTask()
-  }, [hasSubmitApiConfig, showToast])
+  }, [hasRunningTask, hasSubmitApiConfig, showToast])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
   const imageEngine = settings.imageEngine === 'gemini' ? 'gemini' : 'openai'
@@ -1301,7 +1311,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!hasSubmitApiConfig && submitHover} text="生图服务暂未完成后台配置" />
+                  <ButtonTooltip visible={Boolean(submitTooltipText && submitHover)} text={submitTooltipText} />
                   <button
                     onClick={handleSubmitClick}
                     disabled={hasSubmitApiConfig ? !canSubmit : false}
@@ -1355,7 +1365,7 @@ export default function InputBar() {
                   onMouseEnter={() => setSubmitHover(true)}
                   onMouseLeave={() => setSubmitHover(false)}
                 >
-                  <ButtonTooltip visible={!hasSubmitApiConfig && submitHover} text="生图服务暂未完成后台配置" />
+                  <ButtonTooltip visible={Boolean(submitTooltipText && submitHover)} text={submitTooltipText} />
                   <button
                     onClick={handleSubmitClick}
                     disabled={hasSubmitApiConfig ? !canSubmit : false}

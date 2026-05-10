@@ -17,6 +17,7 @@ import AnnouncementBanner from './components/AnnouncementBanner'
 import { readCachedCardBalance, readCardBalance, readClientConfig, type CardBalance, type ClientConfig } from './lib/cardClient'
 
 const BALANCE_REFRESH_INTERVAL_MS = 30_000
+const BUSY_BALANCE_REFRESH_INTERVAL_MS = 3_000
 
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
@@ -78,6 +79,16 @@ export default function App() {
       window.removeEventListener('online', refreshNow)
     }
   }, [cardReady, refreshBalance])
+
+  useEffect(() => {
+    if (!cardReady || !balance.cards.some((card) => card.busy)) return
+
+    const interval = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshBalance()
+    }, BUSY_BALANCE_REFRESH_INTERVAL_MS)
+
+    return () => window.clearInterval(interval)
+  }, [balance.cards, cardReady, refreshBalance])
 
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search)

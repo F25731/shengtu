@@ -105,6 +105,7 @@ function initDatabase() {
     image_model: process.env.YUNYI_IMAGE_MODEL || 'gpt-image-2',
     gemini_model: process.env.YUNYI_GEMINI_MODEL || 'gemini-3-pro-image-preview',
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
+    max_concurrent_generations: process.env.YUNYI_MAX_CONCURRENT_GENERATIONS || '20',
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
   }
   for (const [key, value] of Object.entries(defaults)) {
@@ -120,7 +121,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'announcement_text']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -179,10 +180,14 @@ function parseCardsHeader(req) {
 }
 
 function getCardsBalance(codes) {
+  const busyCodes = getBusyCardCodes(codes)
   const cards = codes
     .map((code) => publicCard(getCard(code)) || { code, totalCredits: 0, usedCredits: 0, remainingCredits: 0, status: 'missing' })
+    .map((card) => ({ ...card, busy: busyCodes.has(card.code) }))
   const totalRemaining = cards.reduce((sum, card) => sum + (card.status === 'active' ? card.remainingCredits : 0), 0)
-  return { cards, totalRemaining }
+  const hasBusyCard = cards.some((card) => card.busy)
+  const availableForGeneration = cards.some((card) => card.status === 'active' && card.remainingCredits > 0 && !card.busy)
+  return { cards, totalRemaining, hasBusyCard, availableForGeneration }
 }
 
 function deductCredits(codes, cost) {
@@ -299,6 +304,30 @@ function touchProxyJob(job, patch = {}) {
     updatedAt: nowIso(),
     expiresAt: Date.now() + proxyJobTtlMs,
   })
+}
+
+function isActiveProxyJob(job) {
+  return Boolean(job && (job.status === 'pending' || job.status === 'running') && job.expiresAt > Date.now())
+}
+
+function getActiveProxyJobs() {
+  cleanupProxyJobs()
+  return [...proxyJobs.values()].filter(isActiveProxyJob)
+}
+
+function getBusyCardCodes(codes = []) {
+  const wanted = new Set(codes)
+  const busy = new Set()
+  if (!wanted.size) return busy
+  for (const job of getActiveProxyJobs()) {
+    if (job.chargedCard && wanted.has(job.chargedCard)) busy.add(job.chargedCard)
+  }
+  return busy
+}
+
+function getMaxConcurrentProxyJobs(settings) {
+  const value = Number(settings.max_concurrent_generations || 0)
+  return Number.isFinite(value) && value > 0 ? Math.floor(value) : 0
 }
 
 function parseProxyResponseBody(buffer, contentType) {
@@ -485,8 +514,39 @@ async function handleImageProxy(req, res, pathname) {
     sendJson(res, 402, { error: { message: '请先输入卡密' } })
     return
   }
-  const chargedCard = deductCredits(codes, cost)
+  const maxConcurrentJobs = getMaxConcurrentProxyJobs(settings)
+  const activeJobs = getActiveProxyJobs()
+  if (maxConcurrentJobs > 0 && activeJobs.length >= maxConcurrentJobs) {
+    sendJson(res, 429, {
+      error: { message: '当前生成队列较忙，请稍后再试' },
+      code: 'server_busy',
+      balance: getCardsBalance(codes),
+    })
+    return
+  }
+
+  const busyCodes = getBusyCardCodes(codes)
+  const availableCodes = codes.filter((code) => !busyCodes.has(code))
+  if (!availableCodes.length && busyCodes.size > 0) {
+    sendJson(res, 429, {
+      error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
+      code: 'card_busy',
+      balance: getCardsBalance(codes),
+    })
+    return
+  }
+
+  const chargedCard = deductCredits(availableCodes, cost)
   if (!chargedCard) {
+    const balance = getCardsBalance(codes)
+    if (busyCodes.size > 0 && balance.cards.some((card) => card.busy && card.remainingCredits >= cost)) {
+      sendJson(res, 429, {
+        error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
+        code: 'card_busy',
+        balance,
+      })
+      return
+    }
     sendJson(res, 402, { error: { message: '卡密次数不足，请购买或添加卡密' } })
     return
   }
@@ -576,8 +636,39 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     return
   }
 
-  const chargedCard = deductCredits(codes, cost)
+  const maxConcurrentJobs = getMaxConcurrentProxyJobs(settings)
+  const activeJobs = getActiveProxyJobs()
+  if (maxConcurrentJobs > 0 && activeJobs.length >= maxConcurrentJobs) {
+    sendJson(res, 429, {
+      error: { message: '当前生成队列较忙，请稍后再试' },
+      code: 'server_busy',
+      balance: getCardsBalance(codes),
+    })
+    return
+  }
+
+  const busyCodes = getBusyCardCodes(codes)
+  const availableCodes = codes.filter((code) => !busyCodes.has(code))
+  if (!availableCodes.length && busyCodes.size > 0) {
+    sendJson(res, 429, {
+      error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
+      code: 'card_busy',
+      balance: getCardsBalance(codes),
+    })
+    return
+  }
+
+  const chargedCard = deductCredits(availableCodes, cost)
   if (!chargedCard) {
+    const balance = getCardsBalance(codes)
+    if (busyCodes.size > 0 && balance.cards.some((card) => card.busy && card.remainingCredits >= cost)) {
+      sendJson(res, 429, {
+        error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
+        code: 'card_busy',
+        balance,
+      })
+      return
+    }
     sendJson(res, 402, { error: { message: '卡密次数不足，请购买或添加卡密' } })
     return
   }

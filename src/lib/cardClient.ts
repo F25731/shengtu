@@ -11,11 +11,14 @@ export interface PublicCard {
   activatedAt?: string
   createdAt?: string
   updatedAt?: string
+  busy?: boolean
 }
 
 export interface CardBalance {
   cards: PublicCard[]
   totalRemaining: number
+  hasBusyCard?: boolean
+  availableForGeneration?: boolean
 }
 
 export interface ClientConfig {
