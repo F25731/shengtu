@@ -13,6 +13,7 @@ import {
   mergeImportedSettings,
   normalizeSettings,
   switchApiProfileProvider,
+  validateApiProfile,
 } from './apiProfiles'
 
 describe('mergeImportedSettings', () => {
@@ -543,5 +544,18 @@ describe('custom providers', () => {
     expect(restoredProfile.baseUrl).toBe('https://api.compat.example.com/v1')
     expect(restoredProfile.model).toBe('custom-openai-model')
     expect(restoredProfile.apiProxy).toBe(false)
+  })
+
+  it('allows an empty OpenAI-compatible API URL when same-origin proxy is enabled', () => {
+    expect(validateApiProfile(createDefaultOpenAIProfile({
+      baseUrl: '',
+      apiKey: 'server-proxy',
+      apiProxy: true,
+    }))).toBeNull()
+    expect(validateApiProfile(createDefaultOpenAIProfile({
+      baseUrl: '',
+      apiKey: 'direct-key',
+      apiProxy: false,
+    }))).toBe('缺少 API URL')
   })
 })
