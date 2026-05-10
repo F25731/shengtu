@@ -1152,10 +1152,8 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   useStore.getState().setTasks([task, ...latestTasks])
   await putTask(task)
 
-  if (settings.clearInputAfterSubmit) {
-    useStore.getState().setPrompt('')
-    useStore.getState().clearInputImages()
-  }
+  useStore.getState().setPrompt('')
+  useStore.getState().clearInputImages()
   useStore.getState().setReusedTaskApiProfile(null)
 
   // 异步调用 API
