@@ -13,6 +13,7 @@ import MaskEditorModal from './components/MaskEditorModal'
 import ImageContextMenu from './components/ImageContextMenu'
 import CardGate from './components/CardGate'
 import AddCardModal from './components/AddCardModal'
+import AnnouncementBanner from './components/AnnouncementBanner'
 import { readCachedCardBalance, readCardBalance, readClientConfig, type CardBalance, type ClientConfig } from './lib/cardClient'
 
 const BALANCE_REFRESH_INTERVAL_MS = 30_000
@@ -22,7 +23,7 @@ export default function App() {
   const [cardReady, setCardReady] = useState(false)
   const [showAddCard, setShowAddCard] = useState(false)
   const [balance, setBalance] = useState<CardBalance>(() => readCachedCardBalance() ?? { cards: [], totalRemaining: 0 })
-  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1 })
+  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '' })
   const refreshInFlightRef = useRef(false)
 
   const refreshBalance = useCallback(async () => {
@@ -111,6 +112,7 @@ export default function App() {
       <Header balance={balance} onAddCard={() => setShowAddCard(true)} purchaseUrl={clientConfig.purchaseUrl} />
       <main data-home-main data-drag-select-surface className="pt-6 pb-48 sm:pt-8">
         <div className="safe-area-x max-w-7xl mx-auto">
+          <AnnouncementBanner text={clientConfig.announcementText} />
           <TaskGrid />
         </div>
       </main>

@@ -37,6 +37,7 @@
     .two-col { grid-template-columns:minmax(280px,.85fr) minmax(460px,1.5fr); align-items:start; }
     label { display:flex; flex-direction:column; gap:7px; color:#a8afbd; font-size:13px; }
     .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .form-grid .wide { grid-column:1 / -1; }
     .toolbar { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .filters input { width:260px; }
@@ -174,6 +175,7 @@
         <label><span>模型</span><input id="image_model" placeholder="gpt-image-2" /></label>
         <label><span>Gemini 模型</span><input id="gemini_model" placeholder="gemini-3-pro-image-preview" /></label>
         <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
+        <label class="wide"><span>首页公告</span><textarea id="announcement_text" placeholder="公告内容"></textarea></label>
       </div>
       <div class="row" style="margin-top:18px">
         <button onclick="saveSettings()">保存设置</button>
@@ -263,14 +265,14 @@ function closeSettingsModal() {
 
 async function loadSettings() {
   const data = await api('/api/admin/settings')
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'announcement_text']) {
     document.getElementById(key).value = data[key] || ''
   }
 }
 
 async function saveSettings() {
   const payload = {}
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'announcement_text']) {
     payload[key] = document.getElementById(key).value
   }
   await api('/api/admin/settings', { method: 'POST', body: JSON.stringify(payload) })

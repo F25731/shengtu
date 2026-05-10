@@ -21,6 +21,7 @@ export interface CardBalance {
 export interface ClientConfig {
   purchaseUrl: string
   costPerGeneration: number
+  announcementText: string
 }
 
 function normalizeCardCode(input: string): string {
@@ -69,8 +70,13 @@ export function hasStoredCards() {
 
 export async function readClientConfig(): Promise<ClientConfig> {
   const response = await fetch('/api/config', { cache: 'no-store' })
-  if (!response.ok) return { purchaseUrl: '', costPerGeneration: 1 }
-  return response.json()
+  if (!response.ok) return { purchaseUrl: '', costPerGeneration: 1, announcementText: '' }
+  const data = await response.json()
+  return {
+    purchaseUrl: String(data.purchaseUrl || ''),
+    costPerGeneration: Number(data.costPerGeneration || 1),
+    announcementText: String(data.announcementText || ''),
+  }
 }
 
 export async function addCardCode(code: string): Promise<PublicCard> {

@@ -6,7 +6,7 @@ interface Props {
 }
 
 export default function CardGate({ onReady }: Props) {
-  const [config, setConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1 })
+  const [config, setConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '' })
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)

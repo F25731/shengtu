@@ -16,6 +16,7 @@ const port = Number(process.env.PORT || 3000)
 const adminPassword = process.env.YUNYI_ADMIN_PASSWORD || 'admin123456'
 const adminToken = createHash('sha256').update(`yunyi-admin:${adminPassword}`).digest('hex')
 const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
+const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -102,6 +103,7 @@ function initDatabase() {
     image_model: process.env.YUNYI_IMAGE_MODEL || 'gpt-image-2',
     gemini_model: process.env.YUNYI_GEMINI_MODEL || 'gemini-3-pro-image-preview',
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
+    announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
   }
   for (const [key, value] of Object.entries(defaults)) {
     const existing = selectOne('SELECT key FROM settings WHERE key = ?', [key])
@@ -116,7 +118,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'announcement_text']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -503,6 +505,7 @@ async function handleApi(req, res, pathname) {
     sendJson(res, 200, {
       purchaseUrl: settings.purchase_url || '',
       costPerGeneration: Number(settings.cost_per_generation || 1),
+      announcementText: settings.announcement_text || defaultAnnouncementText,
     })
     return
   }
