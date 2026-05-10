@@ -200,6 +200,7 @@ let token = localStorage.getItem('yunyi_admin_token') || ''
 let cardPage = 1
 let cardTotal = 0
 let currentCards = []
+let deletingCardCode = ''
 const cardPageSize = 10
 
 function authHeaders() {
@@ -314,7 +315,7 @@ async function loadCards() {
         <div class="row" style="gap:6px;flex-wrap:nowrap">
           <button class="secondary small" onclick="copyCard('${escapeAttr(card.code)}')">复制</button>
           <button class="danger small" onclick="disableCard('${escapeAttr(card.code)}')">禁用</button>
-          <button class="danger small" onclick="deleteCard('${escapeAttr(card.code)}')">删除</button>
+          <button class="danger small" onclick="deleteCard('${escapeAttr(card.code)}')" ${deletingCardCode === card.code ? 'disabled' : ''}>${deletingCardCode === card.code ? '删除中...' : '删除'}</button>
         </div>
       </td>
     </tr>
@@ -344,8 +345,18 @@ async function disableCard(code) {
 
 async function deleteCard(code) {
   if (!confirm(`删除 ${code}？删除后这个卡密将无法再使用。`)) return
-  await api(`/api/admin/cards/${encodeURIComponent(code)}`, { method: 'DELETE' })
-  await loadCards()
+  deletingCardCode = code
+  loadCards()
+  flashPageInfo('正在删除卡密...')
+  try {
+    await api(`/api/admin/cards/${encodeURIComponent(code)}`, { method: 'DELETE' })
+    flashPageInfo('卡密已删除')
+  } catch (err) {
+    alert(err.message || '删除失败')
+  } finally {
+    deletingCardCode = ''
+    await loadCards()
+  }
 }
 
 async function copyCard(code) {
