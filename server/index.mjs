@@ -568,6 +568,14 @@ async function handleAdmin(req, res, pathname, searchParams) {
     return
   }
 
+  const deleteCardMatch = pathname.match(/^\/api\/admin\/cards\/([^/]+)$/)
+  if (deleteCardMatch && req.method === 'DELETE') {
+    const code = normalizeCardCode(decodeURIComponent(deleteCardMatch[1]))
+    run('DELETE FROM cards WHERE code = ?', [code])
+    sendJson(res, 200, { ok: true })
+    return
+  }
+
   if (pathname === '/api/admin/stats' && req.method === 'GET') {
     sendJson(res, 200, getUsageStats())
     return

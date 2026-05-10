@@ -14,6 +14,7 @@
     button.secondary { background:#23262f; color:#e5e7eb; border:1px solid #333744; }
     button.danger { background:#3a1719; color:#ff7777; border:1px solid #702328; }
     button.ghost { background:transparent; color:#a1a1aa; border:1px solid #2b2f38; }
+    button.small { padding:7px 9px; border-radius:8px; font-size:12px; }
     input, select, textarea { width:100%; border:1px solid #2c303a; border-radius:10px; background:#0d0f14; color:#fff; padding:11px 12px; outline:none; }
     input:focus, select:focus, textarea:focus { border-color:#3b82f6; box-shadow:0 0 0 3px rgba(59,130,246,.12); }
     textarea { min-height:112px; resize:vertical; }
@@ -138,6 +139,7 @@
               <option value="disabled">已禁用</option>
             </select>
             <button class="secondary" onclick="cardPage=1;loadCards()">筛选</button>
+            <button class="secondary" onclick="copyCurrentPageCards()">复制本页</button>
           </div>
         </div>
         <div class="table-wrap">
@@ -197,6 +199,7 @@
 let token = localStorage.getItem('yunyi_admin_token') || ''
 let cardPage = 1
 let cardTotal = 0
+let currentCards = []
 const cardPageSize = 10
 
 function authHeaders() {
@@ -297,6 +300,7 @@ async function loadCards() {
   const data = await api(`/api/admin/cards?q=${q}&status=${status}&page=${cardPage}&pageSize=${cardPageSize}`)
   cardTotal = data.total || 0
   const cards = data.cards || []
+  currentCards = cards
   document.getElementById('cardsBody').innerHTML = cards.length ? cards.map(card => `
     <tr>
       <td><code>${escapeHtml(card.code)}</code></td>
@@ -306,7 +310,13 @@ async function loadCards() {
       <td>${card.remainingCredits}</td>
       <td><span class="status ${card.status}">${statusLabel(card.status)}</span></td>
       <td>${formatTime(card.createdAt)}</td>
-      <td><button class="danger" onclick="disableCard('${escapeAttr(card.code)}')">禁用</button></td>
+      <td>
+        <div class="row" style="gap:6px;flex-wrap:nowrap">
+          <button class="secondary small" onclick="copyCard('${escapeAttr(card.code)}')">复制</button>
+          <button class="danger small" onclick="disableCard('${escapeAttr(card.code)}')">禁用</button>
+          <button class="danger small" onclick="deleteCard('${escapeAttr(card.code)}')">删除</button>
+        </div>
+      </td>
     </tr>
   `).join('') : '<tr><td colspan="8" class="muted">暂无卡密</td></tr>'
   const totalPages = Math.max(1, Math.ceil(cardTotal / cardPageSize))
@@ -330,6 +340,50 @@ async function disableCard(code) {
   if (!confirm(`禁用 ${code}？`)) return
   await api(`/api/admin/cards/${encodeURIComponent(code)}/disable`, { method: 'POST', body: '{}' })
   await loadCards()
+}
+
+async function deleteCard(code) {
+  if (!confirm(`删除 ${code}？删除后这个卡密将无法再使用。`)) return
+  await api(`/api/admin/cards/${encodeURIComponent(code)}`, { method: 'DELETE' })
+  await loadCards()
+}
+
+async function copyCard(code) {
+  await copyText(code)
+  flashPageInfo('已复制卡密')
+}
+
+async function copyCurrentPageCards() {
+  if (!currentCards.length) {
+    flashPageInfo('当前页没有可复制的卡密')
+    return
+  }
+  await copyText(currentCards.map(card => card.code).join('\n'))
+  flashPageInfo(`已复制本页 ${currentCards.length} 张卡密`)
+}
+
+async function copyText(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text)
+    return
+  }
+  const textarea = document.createElement('textarea')
+  textarea.value = text
+  textarea.style.position = 'fixed'
+  textarea.style.opacity = '0'
+  document.body.appendChild(textarea)
+  textarea.select()
+  document.execCommand('copy')
+  textarea.remove()
+}
+
+function flashPageInfo(message) {
+  const el = document.getElementById('cardPageInfo')
+  const previous = el.textContent
+  el.textContent = message
+  setTimeout(() => {
+    el.textContent = previous
+  }, 1400)
 }
 
 function openFailureModal() {
