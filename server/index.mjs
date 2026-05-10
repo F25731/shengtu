@@ -100,6 +100,7 @@ function initDatabase() {
     backgrace_api_url: process.env.BACKGRACE_API_URL || 'https://backgrace.com/v1',
     backgrace_api_key: process.env.BACKGRACE_API_KEY || '',
     image_model: process.env.YUNYI_IMAGE_MODEL || 'gpt-image-2',
+    gemini_model: process.env.YUNYI_GEMINI_MODEL || 'gemini-3-pro-image-preview',
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
   }
   for (const [key, value] of Object.entries(defaults)) {
@@ -115,7 +116,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'cost_per_generation']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -308,6 +309,16 @@ function extractPrompt(contentType, body) {
           .filter(Boolean)
           .join('\n')
       }
+      if (Array.isArray(data.messages)) {
+        return data.messages
+          .flatMap((message) => {
+            if (typeof message?.content === 'string') return [message.content]
+            if (Array.isArray(message?.content)) return message.content.map((item) => item?.text).filter(Boolean)
+            return []
+          })
+          .filter(Boolean)
+          .join('\n')
+      }
     }
     if (contentType.includes('multipart/form-data')) {
       const text = body.toString('utf8')
@@ -350,8 +361,13 @@ function buildProxyBody(contentType, body, settings, apiPath) {
   if (!contentType.includes('application/json')) return body
   try {
     const data = parseJsonBody(body)
-    if (settings.image_model) data.model = settings.image_model
-    if (apiPath.includes('/images/')) data.response_format = 'b64_json'
+    const path = `/${String(apiPath || '').replace(/^\/+/, '')}`
+    if (path.includes('/chat/completions')) {
+      if (settings.gemini_model) data.model = settings.gemini_model
+    } else if (settings.image_model) {
+      data.model = settings.image_model
+    }
+    if (path.includes('/images/')) data.response_format = 'b64_json'
     return Buffer.from(JSON.stringify(data))
   } catch {
     return body

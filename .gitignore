@@ -4,3 +4,8 @@ dev-proxy.config.json
 .wrangler/
 data/
 server/data/
+tools/__pycache__/
+tools/gemini_test_last_response.json
+tools/gemini_test_output_*.jpg
+tools/gemini_test_output_*.png
+tools/gemini_test_output_*.webp

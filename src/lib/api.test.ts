@@ -203,6 +203,46 @@ describe('callImageApi', () => {
     )
   })
 
+  it('uses Chat Completions and extracts markdown data URLs for Gemini image generation', async () => {
+    vi.stubEnv('VITE_API_PROXY_AVAILABLE', 'true')
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify({
+      choices: [{
+        message: {
+          role: 'assistant',
+          content: '![image](data:image/jpeg;base64,aW1hZ2U=)',
+        },
+      }],
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }))
+
+    const result = await callImageApi({
+      settings: {
+        ...DEFAULT_SETTINGS,
+        apiKey: 'test-key',
+        imageEngine: 'gemini',
+      },
+      prompt: 'prompt',
+      params: { ...DEFAULT_PARAMS },
+      inputImageDataUrls: [],
+    })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api-proxy/v1/chat/completions',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    const [, init] = fetchMock.mock.calls[0]
+    const body = JSON.parse(String((init as RequestInit).body))
+    expect(body.model).toBe('gemini-3-pro-image-preview')
+    expect(body.messages[0].content).toBe('Use the following text as the complete prompt. Do not rewrite it:\nprompt')
+    expect(result.images).toEqual(['data:image/jpeg;base64,aW1hZ2U='])
+    expect(result.actualParams).toEqual({
+      n: 1,
+      output_format: 'jpeg',
+    })
+  })
+
   it('polls custom async tasks immediately and keeps polling after transient network errors', async () => {
     vi.useFakeTimers()
     const onCustomTaskEnqueued = vi.fn()

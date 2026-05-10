@@ -42,6 +42,7 @@ export default function InputBar() {
   const params = useStore((s) => s.params)
   const setParams = useStore((s) => s.setParams)
   const settings = useStore((s) => s.settings)
+  const setSettings = useStore((s) => s.setSettings)
   const reusedTaskApiProfileId = useStore((s) => s.reusedTaskApiProfileId)
   const setLightboxImageId = useStore((s) => s.setLightboxImageId)
   const showToast = useStore((s) => s.showToast)
@@ -226,13 +227,18 @@ export default function InputBar() {
   }, [hasSubmitApiConfig, showToast])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
+  const imageEngine = settings.imageEngine === 'gemini' ? 'gemini' : 'openai'
+  const switchImageEngine = useCallback((nextEngine: 'openai' | 'gemini') => {
+    if (imageEngine === nextEngine) return
+    setSettings({ imageEngine: nextEngine })
+  }, [imageEngine, setSettings])
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nLimitHintText = isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
-    : `OpenAI 最大请求数量为 ${outputImageLimit}`
+    : `${imageEngine === 'gemini' ? 'Gemini' : 'ChatGPT'} 最大请求数量为 ${outputImageLimit}`
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
@@ -1085,6 +1091,28 @@ export default function InputBar() {
     </div>
   )
 
+  const renderEngineSwitch = () => (
+    <div className="mb-3 flex items-center gap-1 rounded-xl border border-gray-200/60 bg-white/40 p-1 text-xs shadow-sm dark:border-white/[0.08] dark:bg-white/[0.03]">
+      {[
+        { value: 'openai' as const, label: 'ChatGPT' },
+        { value: 'gemini' as const, label: 'Gemini' },
+      ].map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          onClick={() => switchImageEngine(item.value)}
+          className={`min-w-[88px] rounded-lg px-3 py-1.5 font-medium transition-all ${
+            imageEngine === item.value
+              ? 'bg-blue-500 text-white shadow'
+              : 'text-gray-500 hover:bg-white/70 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-white/[0.06] dark:hover:text-gray-100'
+          }`}
+        >
+          {item.label}
+        </button>
+      ))}
+    </div>
+  )
+
   return (
     <>
       {/* 全屏拖拽遮罩 */}
@@ -1242,6 +1270,7 @@ export default function InputBar() {
 
           {/* 参数 + 按钮 */}
           <div className="mt-3">
+            {renderEngineSwitch()}
             {/* 桌面端布局 */}
             <div className="hidden sm:flex items-end justify-between gap-3">
               {renderParams('grid-cols-5')}

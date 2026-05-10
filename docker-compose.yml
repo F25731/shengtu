@@ -12,6 +12,7 @@ services:
       BACKGRACE_API_URL: "${BACKGRACE_API_URL:-https://backgrace.com/v1}"
       BACKGRACE_API_KEY: "${BACKGRACE_API_KEY:-}"
       YUNYI_IMAGE_MODEL: "${YUNYI_IMAGE_MODEL:-gpt-image-2}"
+      YUNYI_GEMINI_MODEL: "${YUNYI_GEMINI_MODEL:-gemini-3-pro-image-preview}"
       YUNYI_PURCHASE_URL: "${YUNYI_PURCHASE_URL:-}"
       YUNYI_COST_PER_GENERATION: "${YUNYI_COST_PER_GENERATION:-1}"
       YUNYI_DATA_DIR: /app/data

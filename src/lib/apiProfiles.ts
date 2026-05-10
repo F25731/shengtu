@@ -18,6 +18,7 @@ const DEFAULT_BASE_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL) ||
 const DEFAULT_API_KEY = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_KEY) || 'yunyi-server'
 const DEFAULT_OPENAI_API_PROXY = true
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
+export const DEFAULT_GEMINI_MODEL = 'gemini-3-pro-image-preview'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
@@ -455,6 +456,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     model: active.model,
     timeout: active.timeout,
     apiMode: active.apiMode,
+    imageEngine: record.imageEngine === 'gemini' ? 'gemini' : 'openai',
     codexCli: active.codexCli,
     apiProxy: active.apiProxy,
     customProviders,
@@ -475,6 +477,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
+  if (provider === 'gemini') return 'Gemini'
   if (provider === 'openai') return 'OpenAI'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }
@@ -732,6 +735,7 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   model: DEFAULT_IMAGES_MODEL,
   timeout: DEFAULT_API_TIMEOUT,
   apiMode: 'images',
+  imageEngine: 'openai',
   codexCli: true,
   apiProxy: DEFAULT_OPENAI_API_PROXY,
   responseFormatB64Json: true,

@@ -172,6 +172,7 @@
         <label><span>BackGrace API URL</span><input id="backgrace_api_url" placeholder="https://backgrace.com/v1" /></label>
         <label><span>BackGrace API Key</span><input id="backgrace_api_key" placeholder="留空不修改" /></label>
         <label><span>模型</span><input id="image_model" placeholder="gpt-image-2" /></label>
+        <label><span>Gemini 模型</span><input id="gemini_model" placeholder="gemini-3-pro-image-preview" /></label>
         <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
       </div>
       <div class="row" style="margin-top:18px">
@@ -262,14 +263,14 @@ function closeSettingsModal() {
 
 async function loadSettings() {
   const data = await api('/api/admin/settings')
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'cost_per_generation']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']) {
     document.getElementById(key).value = data[key] || ''
   }
 }
 
 async function saveSettings() {
   const payload = {}
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'cost_per_generation']) {
+  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation']) {
     payload[key] = document.getElementById(key).value
   }
   await api('/api/admin/settings', { method: 'POST', body: JSON.stringify(payload) })

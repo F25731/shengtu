@@ -10,7 +10,7 @@ import type {
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
-import { DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_GEMINI_MODEL, DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import {
   CURRENT_THUMBNAIL_VERSION,
@@ -741,6 +741,7 @@ export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiP
 
   if (task.apiProfileId) {
     const byId = normalized.profiles.find((profile) => profile.id === task.apiProfileId)
+    if (provider === 'gemini' && byId) return byId
     if (byId && (!provider || byId.provider === provider)) return byId
     return null
   }
@@ -1121,6 +1122,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const parentTask = getEditParentTask(orderedInputImages, latestTasks)
   const editContextPrompts = getEditContextPrompts(parentTask)
   const apiPrompt = buildContextualEditPrompt(editContextPrompts, prompt.trim())
+  const taskImageEngine = requestSettings.imageEngine === 'gemini' ? 'gemini' : 'openai'
+  const taskApiProvider = taskImageEngine === 'gemini' ? 'gemini' : activeProfile.provider
+  const taskApiProfileName = taskImageEngine === 'gemini' ? 'Gemini' : activeProfile.name
+  const taskApiModel = taskImageEngine === 'gemini' ? DEFAULT_GEMINI_MODEL : activeProfile.model
   const taskId = genId()
   const task: TaskRecord = {
     id: taskId,
@@ -1129,10 +1134,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
     ...(editContextPrompts.length ? { editContextPrompts } : {}),
     ...(parentTask ? { parentTaskId: parentTask.id, parentOutputImageId: orderedInputImages[0].id } : {}),
     params: normalizedParams,
-    apiProvider: activeProfile.provider,
+    apiProvider: taskApiProvider,
     apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiModel: activeProfile.model,
+    apiProfileName: taskApiProfileName,
+    apiModel: taskApiModel,
     inputImageIds: orderedInputImages.map((i) => i.id),
     maskTargetImageId,
     maskImageId,
@@ -1176,6 +1181,10 @@ async function executeTask(taskId: string) {
   const activeProfile = taskProfile ?? getActiveApiProfile(settings)
   const requestSettings = createSettingsForApiProfile(settings, activeProfile)
   const taskProvider = task.apiProvider ?? activeProfile.provider
+  const apiRequestSettings = normalizeSettings({
+    ...requestSettings,
+    imageEngine: taskProvider === 'gemini' ? 'gemini' : requestSettings.imageEngine,
+  })
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
     ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
     : null
@@ -1183,7 +1192,7 @@ async function executeTask(taskId: string) {
     ? { taskId: task.customTaskId }
     : null
 
-  if (taskProvider !== 'fal' && !isAsyncCustomProviderTask(requestSettings, taskProvider, task.inputImageIds.length > 0)) {
+  if (taskProvider !== 'fal' && !isAsyncCustomProviderTask(apiRequestSettings, taskProvider, task.inputImageIds.length > 0)) {
     scheduleOpenAIWatchdog(taskId, activeProfile.timeout)
   }
 
@@ -1202,7 +1211,7 @@ async function executeTask(taskId: string) {
     }
 
     const result = await callImageApi({
-      settings: requestSettings,
+      settings: apiRequestSettings,
       prompt: task.apiPrompt ?? task.prompt,
       params: task.params,
       inputImageDataUrls: inputDataUrls,
@@ -1361,7 +1370,15 @@ export function updateTaskInStore(taskId: string, patch: Partial<TaskRecord>) {
 export async function retryTask(task: TaskRecord) {
   const { settings } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
-  const normalizedParams = normalizeParamsForSettings(task.params, settings, { hasInputImages: task.inputImageIds.length > 0 })
+  const isGeminiTask = task.apiProvider === 'gemini'
+  const retrySettings = normalizeSettings({
+    ...settings,
+    imageEngine: isGeminiTask ? 'gemini' : settings.imageEngine,
+  })
+  const retryProvider = isGeminiTask ? 'gemini' : activeProfile.provider
+  const retryProfileName = isGeminiTask ? 'Gemini' : activeProfile.name
+  const retryModel = isGeminiTask ? DEFAULT_GEMINI_MODEL : activeProfile.model
+  const normalizedParams = normalizeParamsForSettings(task.params, retrySettings, { hasInputImages: task.inputImageIds.length > 0 })
   const taskId = genId()
   const newTask: TaskRecord = {
     id: taskId,
@@ -1371,10 +1388,10 @@ export async function retryTask(task: TaskRecord) {
     parentTaskId: task.parentTaskId,
     parentOutputImageId: task.parentOutputImageId,
     params: normalizedParams,
-    apiProvider: activeProfile.provider,
+    apiProvider: retryProvider,
     apiProfileId: activeProfile.id,
-    apiProfileName: activeProfile.name,
-    apiModel: activeProfile.model,
+    apiProfileName: retryProfileName,
+    apiModel: retryModel,
     inputImageIds: [...task.inputImageIds],
     maskTargetImageId: task.maskTargetImageId ?? null,
     maskImageId: task.maskImageId ?? null,
@@ -1395,7 +1412,7 @@ export async function retryTask(task: TaskRecord) {
 
 /** 复用配置 */
 export async function reuseConfig(task: TaskRecord) {
-  const { settings, setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile } = useStore.getState()
+  const { settings, setPrompt, setParams, setInputImages, setMaskDraft, clearMaskDraft, showToast, setConfirmDialog, setReusedTaskApiProfile, setSettings } = useStore.getState()
   const normalizedSettings = normalizeSettings(settings)
   const currentProfile = getActiveApiProfile(settings)
   const matchedProfile = normalizedSettings.reuseTaskApiProfileTemporarily ? getTaskApiProfile(normalizedSettings, task) : null
@@ -1404,6 +1421,11 @@ export async function reuseConfig(task: TaskRecord) {
   const taskProfileName = matchedProfile?.name ?? getTaskApiProfileName(task)
   const paramsSettings = shouldTemporarilyReuseProfile && matchedProfile ? createSettingsForApiProfile(normalizedSettings, matchedProfile) : normalizedSettings
 
+  if (task.apiProvider === 'gemini') {
+    setSettings({ imageEngine: 'gemini' })
+  } else if (task.apiProvider === 'openai') {
+    setSettings({ imageEngine: 'openai' })
+  }
   setPrompt(task.prompt)
   setParams(normalizeParamsForSettings(task.params, paramsSettings, { hasInputImages: task.inputImageIds.length > 0 }))
   setReusedTaskApiProfile(

@@ -1,6 +1,7 @@
 // ===== 设置 =====
 
 export type ApiMode = 'images' | 'responses'
+export type ImageEngine = 'openai' | 'gemini'
 export type BuiltInApiProvider = 'openai' | 'fal'
 export type ApiProvider = BuiltInApiProvider | string
 export type CustomProviderTemplate = 'http-image'
@@ -74,6 +75,7 @@ export interface AppSettings {
   model: string
   timeout: number
   apiMode: ApiMode
+  imageEngine: ImageEngine
   codexCli: boolean
   apiProxy: boolean
   customProviders: CustomProviderDefinition[]
