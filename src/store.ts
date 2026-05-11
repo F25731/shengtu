@@ -29,8 +29,8 @@ import {
   clearImages,
   storeImage,
 } from './lib/db'
-import { callImageApi } from './lib/api'
-import { IMAGE_FETCH_CORS_HINT } from './lib/imageApiShared'
+import { callImageApi, resumeImageApiTask } from './lib/api'
+import { IMAGE_FETCH_CORS_HINT, type CallApiOptions } from './lib/imageApiShared'
 import { getFalErrorMessage, getFalQueuedImageResult } from './lib/falAiImageApi'
 import { getCustomQueuedImageResult } from './lib/openaiCompatibleImageApi'
 import { validateMaskMatchesImage } from './lib/canvasImage'
@@ -52,8 +52,10 @@ const MAX_THUMBNAIL_CACHE_ENTRIES = 80
 const MAX_THUMBNAIL_BACKFILL_CONCURRENT = 4
 const FAL_RECOVERY_POLL_MS = 10_000
 const CUSTOM_RECOVERY_POLL_MS = 10_000
+const PROXY_RECOVERY_POLL_MS = 5_000
 const falRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const customRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const proxyRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const openAIWatchdogTimers = new Map<string, ReturnType<typeof setTimeout>>()
 const OPENAI_INTERRUPTED_ERROR = '请求中断'
 
@@ -633,7 +635,7 @@ function isAsyncCustomProviderTask(settings: AppSettings, provider: string, hasI
 export function markInterruptedOpenAIRunningTasks(tasks: TaskRecord[], now = Date.now()) {
   const interruptedTasks: TaskRecord[] = []
   const updatedTasks = tasks.map((task) => {
-    if (!isRunningOpenAITask(task) || task.customTaskId) return task
+    if (!isRunningOpenAITask(task) || task.customTaskId || task.proxyTaskId || task.proxyPollUrl) return task
 
     const updated: TaskRecord = {
       ...task,
@@ -845,6 +847,21 @@ function scheduleCustomRecovery(taskId: string, delayMs = CUSTOM_RECOVERY_POLL_M
   customRecoveryTimers.set(taskId, timer)
 }
 
+function clearProxyRecoveryTimer(taskId: string) {
+  const timer = proxyRecoveryTimers.get(taskId)
+  if (timer) clearTimeout(timer)
+  proxyRecoveryTimers.delete(taskId)
+}
+
+function scheduleProxyRecovery(taskId: string, delayMs = PROXY_RECOVERY_POLL_MS) {
+  if (proxyRecoveryTimers.has(taskId)) return
+  const timer = setTimeout(() => {
+    proxyRecoveryTimers.delete(taskId)
+    recoverProxyTask(taskId)
+  }, delayMs)
+  proxyRecoveryTimers.set(taskId, timer)
+}
+
 function hasActualParams(params: Partial<TaskParams> | undefined): params is Partial<TaskParams> {
   return Boolean(params && Object.keys(params).length > 0)
 }
@@ -983,6 +1000,12 @@ export async function initStore() {
       (task.status === 'running' || task.customRecoverable)
     ) {
       scheduleCustomRecovery(task.id, 0)
+    }
+    if (
+      task.proxyPollUrl &&
+      (task.status === 'running' || task.proxyRecoverable)
+    ) {
+      scheduleProxyRecovery(task.id, 0)
     }
   }
 
@@ -1181,7 +1204,7 @@ async function executeTask(taskId: string) {
   const taskProvider = task.apiProvider ?? activeProfile.provider
   const apiRequestSettings = normalizeSettings({
     ...requestSettings,
-    imageEngine: taskProvider === 'gemini' ? 'gemini' : requestSettings.imageEngine,
+    imageEngine: taskProvider === 'gemini' ? 'gemini' : 'openai',
   })
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
     ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
@@ -1189,10 +1212,9 @@ async function executeTask(taskId: string) {
   let customTaskInfo: { taskId: string } | null = task.customTaskId
     ? { taskId: task.customTaskId }
     : null
-
-  if (taskProvider !== 'fal' && !isAsyncCustomProviderTask(apiRequestSettings, taskProvider, task.inputImageIds.length > 0)) {
-    scheduleOpenAIWatchdog(taskId, activeProfile.timeout)
-  }
+  let proxyTaskInfo: { taskId: string; pollUrl: string } | null = task.proxyPollUrl
+    ? { taskId: task.proxyTaskId || '', pollUrl: task.proxyPollUrl }
+    : null
 
   try {
     // 获取输入图片 data URLs
@@ -1208,12 +1230,18 @@ async function executeTask(taskId: string) {
       if (!maskDataUrl) throw new Error('遮罩图片已不存在')
     }
 
-    const result = await callImageApi({
+    const commonApiOptions: CallApiOptions = {
       settings: apiRequestSettings,
       prompt: task.apiPrompt ?? task.prompt,
       params: task.params,
-      inputImageDataUrls: inputDataUrls,
+      inputImageDataUrls: proxyTaskInfo ? [] : inputDataUrls,
       maskDataUrl,
+      onProxyTaskPollIssue: (message: string) => {
+        updateTaskInStore(taskId, {
+          error: message,
+          proxyRecoverable: true,
+        })
+      },
       onFalRequestEnqueued: (request) => {
         falRequestInfo = request
         updateTaskInStore(taskId, {
@@ -1229,7 +1257,19 @@ async function executeTask(taskId: string) {
           customRecoverable: false,
         })
       },
-    })
+      onProxyTaskEnqueued: (request) => {
+        proxyTaskInfo = request
+        updateTaskInStore(taskId, {
+          proxyTaskId: request.taskId,
+          proxyPollUrl: request.pollUrl,
+          proxyRecoverable: false,
+          error: null,
+        })
+      },
+    }
+    const result = proxyTaskInfo?.pollUrl
+      ? await resumeImageApiTask(commonApiOptions, proxyTaskInfo.pollUrl)
+      : await callImageApi(commonApiOptions)
 
     const latestBeforeSuccess = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeSuccess || latestBeforeSuccess.status !== 'running') return
@@ -1276,6 +1316,7 @@ async function executeTask(taskId: string) {
     const latestBeforeUpdate = useStore.getState().tasks.find((t) => t.id === taskId)
     if (!latestBeforeUpdate || latestBeforeUpdate.status !== 'running') return
     clearOpenAIWatchdogTimer(taskId)
+    clearProxyRecoveryTimer(taskId)
     updateTaskInStore(taskId, {
       outputImages: outputIds,
       rawImageUrls: result.rawImageUrls?.length ? result.rawImageUrls : undefined,
@@ -1287,6 +1328,8 @@ async function executeTask(taskId: string) {
       elapsed: Date.now() - task.createdAt,
       falRecoverable: false,
       customRecoverable: false,
+      proxyRecoverable: false,
+      error: null,
     })
 
     useStore.getState().showToast(`生成完成，共 ${outputIds.length} 张图片`, 'success')
@@ -1330,6 +1373,7 @@ async function executeTask(taskId: string) {
       })
       scheduleCustomRecovery(taskId)
     } else {
+      clearProxyRecoveryTimer(taskId)
       let errorMessage = err instanceof Error ? err.message : String(err)
       if (isApiRequestCorsError(err) && !errorMessage.includes(IMAGE_FETCH_CORS_HINT)) {
         errorMessage += '\n提示：接口可能不支持浏览器跨域请求，可开启 API 代理解决。'
@@ -1340,6 +1384,7 @@ async function executeTask(taskId: string) {
         ...getRawErrorPayload(err),
         falRecoverable: false,
         customRecoverable: false,
+        proxyRecoverable: false,
         finishedAt: Date.now(),
         elapsed: Date.now() - task.createdAt,
       })
@@ -1688,6 +1733,19 @@ async function recoverCustomTask(taskId: string) {
       elapsed: Date.now() - task.createdAt,
     })
   }
+}
+
+async function recoverProxyTask(taskId: string) {
+  const task = useStore.getState().tasks.find((item) => item.id === taskId)
+  if (!task || !task.proxyPollUrl || task.status === 'done') return
+  updateTaskInStore(taskId, {
+    status: 'running',
+    error: task.error || '连接中，稍后自动刷新',
+    proxyRecoverable: true,
+    finishedAt: null,
+    elapsed: null,
+  })
+  await executeTask(taskId)
 }
 
 function formatExportFileTime(date: Date): string {

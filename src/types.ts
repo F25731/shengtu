@@ -157,6 +157,12 @@ export interface TaskRecord {
   customTaskId?: string
   /** 自定义异步任务是否等待自动恢复 */
   customRecoverable?: boolean
+  /** YunYi proxy task id for refreshing/recovering a submitted generation. */
+  proxyTaskId?: string
+  /** YunYi proxy polling URL for the submitted generation. */
+  proxyPollUrl?: string
+  /** Whether proxy polling is temporarily reconnecting. */
+  proxyRecoverable?: boolean
   /** API 返回的实际生效参数，用于标记与请求值不一致的情况 */
   actualParams?: Partial<TaskParams>
   /** 输出图片对应的实际生效参数，key 为 outputImages 中的图片 id */

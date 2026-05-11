@@ -131,7 +131,7 @@ function TaskCard({
     const id = setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => clearInterval(id)
-  }, [task.customRecoverable, task.falRecoverable, task.status])
+  }, [task.customRecoverable, task.falRecoverable, task.proxyRecoverable, task.status])
 
   // 加载缩略图
   useEffect(() => {
@@ -185,6 +185,7 @@ function TaskCard({
   const showSwipeAction = isSwipeReady || swipeActionActive
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const isProxyReconnecting = task.status === 'running' && task.proxyRecoverable
   const showRunningTimer = task.status === 'running' || isFalReconnecting || isCustomReconnecting
   const swipeBgClass = showSwipeAction
     ? swipeStartedSelected
@@ -281,7 +282,9 @@ function TaskCard({
                   d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                 />
               </svg>
-              <span className="text-xs text-gray-400 dark:text-gray-500">生成中...</span>
+              <span className={`text-xs text-center ${isProxyReconnecting ? 'text-yellow-500' : 'text-gray-400 dark:text-gray-500'}`}>
+                {isProxyReconnecting ? task.error || '连接中，稍后自动刷新' : '生成中...'}
+              </span>
             </div>
           )}
           {task.status === 'error' && isFalReconnecting && (

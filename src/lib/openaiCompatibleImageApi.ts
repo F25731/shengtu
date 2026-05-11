@@ -17,6 +17,7 @@ import {
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
+  pollYunYiTaskResponse,
   resolveYunYiTaskResponse,
 } from './imageApiShared'
 import { createCardsHeaderValue } from './cardClient'
@@ -236,6 +237,46 @@ export async function callOpenAICompatibleImageApi(opts: CallApiOptions, profile
     : callImagesApi(opts, profile)
 }
 
+async function parseOpenAICompatibleFinalResponse(
+  response: Response,
+  opts: Pick<CallApiOptions, 'params'>,
+  profile: ApiProfile,
+  signal?: AbortSignal,
+): Promise<CallApiResult> {
+  if (!response.ok) {
+    throw new Error(await getApiErrorMessage(response))
+  }
+
+  const mime = MIME_MAP[opts.params.output_format] || 'image/png'
+  if (profile.apiMode === 'responses') {
+    const payload = await response.json() as ResponsesApiResponse
+    const imageResults = parseResponsesImageResults(payload, mime)
+    const actualParams = mergeActualParams(imageResults[0]?.actualParams ?? {})
+    return {
+      images: imageResults.map((result) => result.image),
+      actualParams,
+      actualParamsList: imageResults.map((result) => mergeActualParams(result.actualParams ?? {})),
+      revisedPrompts: imageResults.map((result) => result.revisedPrompt),
+    }
+  }
+
+  return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, signal)
+}
+
+export async function resumeOpenAICompatibleImageTask(
+  opts: CallApiOptions,
+  profile: ApiProfile,
+  pollUrl: string,
+): Promise<CallApiResult> {
+  const response = await pollYunYiTaskResponse(
+    { pollUrl },
+    {
+      onPollIssue: opts.onProxyTaskPollIssue,
+    },
+  )
+  return parseOpenAICompatibleFinalResponse(response, opts, profile)
+}
+
 async function callImagesApi(opts: CallApiOptions, profile: ApiProfile, customProvider?: CustomProviderDefinition | null): Promise<CallApiResult> {
   const n = opts.params.n > 0 ? opts.params.n : 1
   if (profile.codexCli && n > 1) {
@@ -283,14 +324,14 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
     ? `${PROMPT_REWRITE_GUARD_PREFIX}\n${originalPrompt}`
     : originalPrompt
   const isEdit = inputImageDataUrls.length > 0
-  const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const requestHeaders = createRequestHeaders(profile)
   const paths = createOpenAICompatiblePaths(customProvider)
 
   const controller = new AbortController()
-  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const submitTimeoutSeconds = useApiProxy ? Math.min(profile.timeout, 60) : profile.timeout
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), submitTimeoutSeconds * 1000)
 
   try {
     let response: Response
@@ -391,13 +432,13 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    response = await resolveYunYiTaskResponse(response, controller.signal)
+    response = await resolveYunYiTaskResponse(response, {
+      signal: controller.signal,
+      onTaskEnqueued: opts.onProxyTaskEnqueued,
+      onPollIssue: opts.onProxyTaskPollIssue,
+    })
 
-    if (!response.ok) {
-      throw new Error(await getApiErrorMessage(response))
-    }
-
-    return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
+    return parseOpenAICompatibleFinalResponse(response, opts, { ...profile, apiMode: 'images' }, controller.signal)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
@@ -735,12 +776,12 @@ async function callResponsesImageApi(opts: CallApiOptions, profile: ApiProfile):
 
 async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiProfile): Promise<CallApiResult> {
   const { prompt, params, inputImageDataUrls } = opts
-  const mime = MIME_MAP[params.output_format] || 'image/png'
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const requestHeaders = createRequestHeaders(profile)
   const controller = new AbortController()
-  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const submitTimeoutSeconds = useApiProxy ? Math.min(profile.timeout, 60) : profile.timeout
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), submitTimeoutSeconds * 1000)
 
   try {
     if (opts.maskDataUrl) {
@@ -774,25 +815,13 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    const finalResponse = await resolveYunYiTaskResponse(response, controller.signal)
+    const finalResponse = await resolveYunYiTaskResponse(response, {
+      signal: controller.signal,
+      onTaskEnqueued: opts.onProxyTaskEnqueued,
+      onPollIssue: opts.onProxyTaskPollIssue,
+    })
 
-    if (!finalResponse.ok) {
-      throw new Error(await getApiErrorMessage(finalResponse))
-    }
-
-    const payload = await finalResponse.json() as ResponsesApiResponse
-    const imageResults = parseResponsesImageResults(payload, mime)
-    const actualParams = mergeActualParams(
-      imageResults[0]?.actualParams ?? {},
-    )
-    return {
-      images: imageResults.map((result) => result.image),
-      actualParams,
-      actualParamsList: imageResults.map((result) =>
-        mergeActualParams(result.actualParams ?? {}),
-      ),
-      revisedPrompts: imageResults.map((result) => result.revisedPrompt),
-    }
+    return parseOpenAICompatibleFinalResponse(finalResponse, opts, profile, controller.signal)
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }

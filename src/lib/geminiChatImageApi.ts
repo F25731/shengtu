@@ -12,6 +12,7 @@ import {
   MIME_MAP,
   normalizeBase64Image,
   pickActualParams,
+  pollYunYiTaskResponse,
   resolveYunYiTaskResponse,
 } from './imageApiShared'
 import { createCardsHeaderValue } from './cardClient'
@@ -150,7 +151,8 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const controller = new AbortController()
-  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  const submitTimeoutSeconds = useApiProxy ? Math.min(profile.timeout, 60) : profile.timeout
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), submitTimeoutSeconds * 1000)
 
   try {
     const body = {
@@ -179,7 +181,11 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
       clearTimeout(timeoutId)
       timeoutId = null
     }
-    response = await resolveYunYiTaskResponse(response, controller.signal)
+    response = await resolveYunYiTaskResponse(response, {
+      signal: controller.signal,
+      onTaskEnqueued: opts.onProxyTaskEnqueued,
+      onPollIssue: opts.onProxyTaskPollIssue,
+    })
 
     if (!response.ok) {
       throw new Error(await getApiErrorMessage(response))
@@ -223,4 +229,20 @@ export async function callGeminiChatImageApi(opts: CallApiOptions, profile: ApiP
   const n = opts.params.n > 0 ? opts.params.n : 1
   if (n > 1) return callGeminiChatImageApiConcurrent(opts, profile, n)
   return callGeminiChatImageApiSingle(opts, profile)
+}
+
+export async function resumeGeminiChatImageTask(
+  opts: CallApiOptions,
+  profile: ApiProfile,
+  pollUrl: string,
+): Promise<CallApiResult> {
+  const fallbackMime = MIME_MAP[opts.params.output_format] || 'image/png'
+  const response = await pollYunYiTaskResponse(
+    { pollUrl },
+    { onPollIssue: opts.onProxyTaskPollIssue },
+  )
+  if (!response.ok) {
+    throw new Error(await getApiErrorMessage(response))
+  }
+  return parseGeminiChatResponse(await response.json(), fallbackMime)
 }

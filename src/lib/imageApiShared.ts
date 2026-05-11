@@ -18,6 +18,8 @@ export interface CallApiOptions {
   maskDataUrl?: string
   onFalRequestEnqueued?: (request: { requestId: string; endpoint: string }) => void
   onCustomTaskEnqueued?: (task: { taskId: string }) => void
+  onProxyTaskEnqueued?: (task: { taskId: string; pollUrl: string }) => void
+  onProxyTaskPollIssue?: (message: string) => void
 }
 
 export interface CallApiResult {
@@ -232,6 +234,14 @@ interface YunYiTaskEnvelope {
   error?: { message?: string } | string
 }
 
+export interface YunYiTaskPollOptions {
+  signal?: AbortSignal
+  onTaskEnqueued?: (task: { taskId: string; pollUrl: string }) => void
+  onPollIssue?: (message: string) => void
+}
+
+const YUNYI_POLL_RECONNECT_MESSAGE = '连接中，稍后自动刷新'
+
 function wait(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -275,19 +285,22 @@ function responseFromYunYiTask(task: YunYiTaskEnvelope): Response {
   })
 }
 
-export async function resolveYunYiTaskResponse(response: Response, signal?: AbortSignal): Promise<Response> {
-  if (response.status !== 202) return response
+function normalizeYunYiTaskOptions(signalOrOptions?: AbortSignal | YunYiTaskPollOptions): YunYiTaskPollOptions {
+  if (!signalOrOptions) return {}
+  if ('aborted' in signalOrOptions) return { signal: signalOrOptions }
+  return signalOrOptions
+}
 
-  let task: YunYiTaskEnvelope
-  try {
-    const payload = await response.clone().json()
-    if (!isYunYiTaskEnvelope(payload)) return response
-    task = payload
-  } catch {
-    return response
-  }
+function isRetryableYunYiPollStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500
+}
 
-  refreshYunYiBalance()
+export async function pollYunYiTaskResponse(
+  task: Pick<YunYiTaskEnvelope, 'taskId' | 'pollUrl'>,
+  signalOrOptions?: AbortSignal | YunYiTaskPollOptions,
+): Promise<Response> {
+  const options = normalizeYunYiTaskOptions(signalOrOptions)
+  const signal = options.signal
   const pollUrl = task.pollUrl || `/api-proxy/tasks/${encodeURIComponent(task.taskId || '')}`
   let lastPollingError: unknown
 
@@ -302,10 +315,16 @@ export async function resolveYunYiTaskResponse(response: Response, signal?: Abor
     } catch (err) {
       if (signal?.aborted) throw err
       lastPollingError = err
+      options.onPollIssue?.(YUNYI_POLL_RECONNECT_MESSAGE)
       continue
     }
 
     if (!pollResponse.ok) {
+      if (isRetryableYunYiPollStatus(pollResponse.status)) {
+        lastPollingError = new Error(await getApiErrorMessage(pollResponse))
+        options.onPollIssue?.(YUNYI_POLL_RECONNECT_MESSAGE)
+        continue
+      }
       throw new Error(await getApiErrorMessage(pollResponse))
     }
 
@@ -318,6 +337,25 @@ export async function resolveYunYiTaskResponse(response: Response, signal?: Abor
     refreshYunYiBalance()
     return responseFromYunYiTask(next)
   }
+}
+
+export async function resolveYunYiTaskResponse(response: Response, signalOrOptions?: AbortSignal | YunYiTaskPollOptions): Promise<Response> {
+  if (response.status !== 202) return response
+
+  const options = normalizeYunYiTaskOptions(signalOrOptions)
+  let task: YunYiTaskEnvelope
+  try {
+    const payload = await response.clone().json()
+    if (!isYunYiTaskEnvelope(payload)) return response
+    task = payload
+  } catch {
+    return response
+  }
+
+  refreshYunYiBalance()
+  const pollUrl = task.pollUrl || `/api-proxy/tasks/${encodeURIComponent(task.taskId || '')}`
+  if (task.taskId) options.onTaskEnqueued?.({ taskId: task.taskId, pollUrl })
+  return pollYunYiTaskResponse({ taskId: task.taskId, pollUrl }, options)
 }
 
 export function pickActualParams(source: unknown): Partial<TaskParams> {

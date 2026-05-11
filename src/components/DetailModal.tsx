@@ -70,7 +70,7 @@ export default function DetailModal() {
     const id = window.setInterval(() => setNow(Date.now()), 1000)
     setNow(Date.now())
     return () => window.clearInterval(id)
-  }, [task?.customRecoverable, task?.falRecoverable, task?.status])
+  }, [task?.customRecoverable, task?.falRecoverable, task?.proxyRecoverable, task?.status])
 
   // 加载所有相关图片
   useEffect(() => {
@@ -191,6 +191,7 @@ export default function DetailModal() {
   const showPromptWarning = Boolean(isOpenAiTask && currentOutputImageId && (!currentRevisedPrompt || showRevisedPrompt) && !hasHandledPromptWarning)
   const isFalReconnecting = task.status === 'error' && task.falRecoverable
   const isCustomReconnecting = task.status === 'error' && task.customRecoverable
+  const isProxyReconnecting = task.status === 'running' && task.proxyRecoverable
   const rawImageUrls = task.rawImageUrls ?? []
 
   const formatTime = (ts: number | null) => {
@@ -402,10 +403,17 @@ export default function DetailModal() {
                 {formatDuration()}
               </div>
               {task.status === 'running' && (
-                <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
-                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                </svg>
+                <div className="flex flex-col items-center gap-2 px-4 text-center">
+                  <svg className="w-10 h-10 text-blue-400 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  {isProxyReconnecting && (
+                    <p className="max-w-xs text-sm leading-6 text-yellow-500">
+                      {task.error || '连接中，稍后自动刷新'}
+                    </p>
+                  )}
+                </div>
               )}
             </>
           )}
