@@ -1005,6 +1005,12 @@ function extractTaskIdFromPayload(payload) {
   return ''
 }
 
+function isAi6800SuccessCode(code) {
+  const value = String(code ?? '').trim().toLowerCase()
+  if (!value) return true
+  return value === '0' || value === '200' || value === 'success' || value === 'ok'
+}
+
 function collectImageStrings(value, output = []) {
   if (!value) return output
   if (typeof value === 'string') {
@@ -1165,7 +1171,7 @@ async function fetchAi6800Json(url, route, options = {}) {
     const message = getProxyCustomerErrorMessage({ body: json, bodyText: text }, text)
     throw new Error(message)
   }
-  if (json && typeof json === 'object' && 'code' in json && Number(json.code) !== 0) {
+  if (json && typeof json === 'object' && 'code' in json && !isAi6800SuccessCode(json.code)) {
     throw new Error(String(json.msg || json.message || '中转站请求失败'))
   }
   return json
