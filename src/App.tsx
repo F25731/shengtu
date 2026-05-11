@@ -24,7 +24,7 @@ export default function App() {
   const [cardReady, setCardReady] = useState(false)
   const [showAddCard, setShowAddCard] = useState(false)
   const [balance, setBalance] = useState<CardBalance>(() => readCachedCardBalance() ?? { cards: [], totalRemaining: 0 })
-  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '' })
+  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '', gateNoticeText: '' })
   const refreshInFlightRef = useRef(false)
 
   const refreshBalance = useCallback(async () => {

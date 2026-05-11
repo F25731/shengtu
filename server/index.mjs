@@ -19,6 +19,7 @@ const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const proxyJobs = new Map()
 const proxyJobTtlMs = 6 * 60 * 60 * 1000
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
+const defaultGateNoticeText = '云逸生图支持 ChatGPT 与 Gemini 生图，可上传参考图继续修改，并保留历史记录用于预览和下载。请输入卡密开始使用。'
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -107,6 +108,7 @@ function initDatabase() {
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
     max_concurrent_generations: process.env.YUNYI_MAX_CONCURRENT_GENERATIONS || '20',
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
+    gate_notice_text: process.env.YUNYI_GATE_NOTICE_TEXT || defaultGateNoticeText,
     blocked_words: process.env.YUNYI_BLOCKED_WORDS || '',
   }
   for (const [key, value] of Object.entries(defaults)) {
@@ -122,7 +124,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'blocked_words']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -348,7 +350,7 @@ function createProxyErrorMessage(prefix, detail) {
   return text ? `${prefix}: ${text}` : prefix
 }
 
-const connectionInterruptedMessage = '连接中断，请重试'
+const connectionInterruptedMessage = '内容违规或连接中断，请重试'
 const streamDisconnectedNeedle = 'stream disconnected before completion'
 
 function extractTextContent(value) {
@@ -932,6 +934,7 @@ async function handleApi(req, res, pathname) {
       purchaseUrl: settings.purchase_url || '',
       costPerGeneration: Number(settings.cost_per_generation || 1),
       announcementText: settings.announcement_text || defaultAnnouncementText,
+      gateNoticeText: settings.gate_notice_text || defaultGateNoticeText,
     })
     return
   }
