@@ -4,6 +4,7 @@ import {
   assertImageInputPayloadSize,
   type CallApiOptions,
   type CallApiResult,
+  extractProviderTextMessage,
   fetchImageUrlAsDataUrl,
   getApiErrorMessage,
   getDataUrlEncodedByteSize,
@@ -112,6 +113,8 @@ async function parseGeminiChatResponse(payload: unknown, fallbackMime: string, s
   }
 
   if (!images.length) {
+    const providerMessage = extractProviderTextMessage(payload)
+    if (providerMessage) throw new Error(providerMessage)
     const err = new Error('Gemini 接口没有返回可识别的图片数据，请查看原始响应确认中转站返回结构。')
     ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
     throw err
@@ -147,7 +150,7 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
   const proxyConfig = readClientDevProxyConfig()
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
 
   try {
     const body = {
@@ -172,6 +175,10 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
       signal: controller.signal,
     })
 
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      timeoutId = null
+    }
     response = await resolveYunYiTaskResponse(response, controller.signal)
 
     if (!response.ok) {
@@ -180,7 +187,7 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
 
     return parseGeminiChatResponse(await response.json(), fallbackMime, controller.signal)
   } finally {
-    clearTimeout(timeoutId)
+    if (timeoutId) clearTimeout(timeoutId)
   }
 }
 

@@ -6,6 +6,7 @@ import {
   assertMaskEditFileSize,
   type CallApiOptions,
   type CallApiResult,
+  extractProviderTextMessage,
   fetchImageUrlAsDataUrl,
   getApiErrorMessage,
   getDataUrlDecodedByteSize,
@@ -161,6 +162,8 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
   }
 
   if (!results.length) {
+    const providerMessage = extractProviderTextMessage(payload)
+    if (providerMessage) throw new Error(providerMessage)
     const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
     ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
     throw err
@@ -172,6 +175,8 @@ function parseResponsesImageResults(payload: ResponsesApiResponse, fallbackMime:
 async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, signal?: AbortSignal): Promise<CallApiResult> {
   const data = payload.data
   if (!Array.isArray(data) || !data.length) {
+    const providerMessage = extractProviderTextMessage(payload)
+    if (providerMessage) throw new Error(providerMessage)
     const err = new Error('接口没有返回图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
     ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
     throw err
@@ -202,6 +207,8 @@ async function parseImagesApiResponse(payload: ImageApiResponse, mime: string, s
   }
 
   if (!images.length) {
+    const providerMessage = extractProviderTextMessage(payload)
+    if (providerMessage) throw new Error(providerMessage)
     const err = new Error('接口没有返回可识别的图片数据，请查看原始响应内容确认服务商实际返回的数据结构。如果使用的是中转或兼容接口，建议创建并使用「自定义服务商」配置。')
     ;(err as any).rawResponsePayload = JSON.stringify(payload, null, 2)
     throw err
@@ -283,7 +290,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
   const paths = createOpenAICompatiblePaths(customProvider)
 
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
 
   try {
     let response: Response
@@ -380,6 +387,10 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
       })
     }
 
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      timeoutId = null
+    }
     response = await resolveYunYiTaskResponse(response, controller.signal)
 
     if (!response.ok) {
@@ -388,7 +399,7 @@ async function callImagesApiSingle(opts: CallApiOptions, profile: ApiProfile, cu
 
     return parseImagesApiResponse(await response.json() as ImageApiResponse, mime, controller.signal)
   } finally {
-    clearTimeout(timeoutId)
+    if (timeoutId) clearTimeout(timeoutId)
   }
 }
 
@@ -729,7 +740,7 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
   const useApiProxy = shouldUseApiProxy(profile.apiProxy, proxyConfig)
   const requestHeaders = createRequestHeaders(profile)
   const controller = new AbortController()
-  const timeoutId = setTimeout(() => controller.abort(), profile.timeout * 1000)
+  let timeoutId: ReturnType<typeof setTimeout> | null = setTimeout(() => controller.abort(), profile.timeout * 1000)
 
   try {
     if (opts.maskDataUrl) {
@@ -759,6 +770,10 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       signal: controller.signal,
     })
 
+    if (timeoutId) {
+      clearTimeout(timeoutId)
+      timeoutId = null
+    }
     const finalResponse = await resolveYunYiTaskResponse(response, controller.signal)
 
     if (!finalResponse.ok) {
@@ -779,6 +794,6 @@ async function callResponsesImageApiSingle(opts: CallApiOptions, profile: ApiPro
       revisedPrompts: imageResults.map((result) => result.revisedPrompt),
     }
   } finally {
-    clearTimeout(timeoutId)
+    if (timeoutId) clearTimeout(timeoutId)
   }
 }

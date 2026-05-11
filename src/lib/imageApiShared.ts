@@ -162,6 +162,62 @@ export async function getApiErrorMessage(response: Response): Promise<string> {
   return errorMsg
 }
 
+function extractTextContent(value: unknown): string {
+  if (typeof value === 'string') return value.trim()
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') return item
+        if (!item || typeof item !== 'object') return ''
+        const record = item as Record<string, unknown>
+        return extractTextContent(record.text) || extractTextContent(record.content)
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim()
+  }
+  return ''
+}
+
+export function extractProviderTextMessage(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return ''
+  const record = payload as Record<string, unknown>
+  const error = record.error
+  if (error && typeof error === 'object') {
+    const message = (error as Record<string, unknown>).message
+    if (typeof message === 'string' && message.trim()) return message.trim()
+  }
+  if (typeof error === 'string' && error.trim()) return error.trim()
+  if (typeof record.message === 'string' && record.message.trim()) return record.message.trim()
+  if (typeof record.detail === 'string' && record.detail.trim()) return record.detail.trim()
+  if (typeof record.output_text === 'string' && record.output_text.trim()) return record.output_text.trim()
+
+  if (Array.isArray(record.choices)) {
+    for (const choice of record.choices) {
+      if (!choice || typeof choice !== 'object') continue
+      const choiceRecord = choice as Record<string, unknown>
+      const message = choiceRecord.message
+      if (message && typeof message === 'object') {
+        const text = extractTextContent((message as Record<string, unknown>).content)
+        if (text) return text
+      }
+      const text = extractTextContent(choiceRecord.text)
+      if (text) return text
+    }
+  }
+
+  if (Array.isArray(record.output)) {
+    for (const item of record.output) {
+      if (!item || typeof item !== 'object') continue
+      const itemRecord = item as Record<string, unknown>
+      const text = extractTextContent(itemRecord.content) || extractTextContent(itemRecord.text)
+      if (text) return text
+    }
+  }
+
+  return ''
+}
+
 type YunYiTaskStatus = 'pending' | 'running' | 'success' | 'error' | 'missing'
 
 interface YunYiTaskEnvelope {

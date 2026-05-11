@@ -17,7 +17,7 @@ const adminPassword = process.env.YUNYI_ADMIN_PASSWORD || 'admin123456'
 const adminToken = createHash('sha256').update(`yunyi-admin:${adminPassword}`).digest('hex')
 const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const proxyJobs = new Map()
-const proxyJobTtlMs = 30 * 60 * 1000
+const proxyJobTtlMs = 6 * 60 * 60 * 1000
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
 
 const mimeTypes = {
@@ -348,27 +348,76 @@ function createProxyErrorMessage(prefix, detail) {
   return text ? `${prefix}: ${text}` : prefix
 }
 
-const streamDisconnectedMessage = '连接中断或内容违规，请重试或更换提示词'
+const connectionInterruptedMessage = '连接中断，请重试'
+const streamDisconnectedNeedle = 'stream disconnected before completion'
 
-function normalizeProxyErrorMessage(message) {
-  const text = String(message || '')
-  return text.toLowerCase().includes('stream disconnected before completion') ? streamDisconnectedMessage : text
+function extractTextContent(value) {
+  if (typeof value === 'string') return value
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => typeof item === 'string' ? item : item?.text || item?.content || '')
+      .filter(Boolean)
+      .join('\n')
+  }
+  return ''
 }
 
-function normalizeProxyParsedError(parsed, fallbackMessage) {
-  const friendlyMessage = normalizeProxyErrorMessage(fallbackMessage || parsed?.bodyText || '')
-  if (friendlyMessage === streamDisconnectedMessage) {
-    return {
-      body: { error: { message: friendlyMessage } },
-      bodyText: '',
+function extractProxyProviderMessage(payload) {
+  if (!payload || typeof payload !== 'object') return ''
+  const record = payload
+  if (typeof record.error?.message === 'string') return record.error.message
+  if (typeof record.error === 'string') return record.error
+  if (typeof record.message === 'string') return record.message
+  if (typeof record.detail === 'string') return record.detail
+  if (typeof record.output_text === 'string') return record.output_text
+
+  if (Array.isArray(record.choices)) {
+    for (const choice of record.choices) {
+      const text = extractTextContent(choice?.message?.content) || extractTextContent(choice?.text)
+      if (text) return text
     }
   }
-  return parsed
+
+  if (Array.isArray(record.output)) {
+    for (const item of record.output) {
+      const text = extractTextContent(item?.content) || extractTextContent(item?.text)
+      if (text) return text
+    }
+  }
+
+  return ''
+}
+
+function isStreamDisconnectedMessage(message) {
+  return String(message || '').toLowerCase().includes(streamDisconnectedNeedle)
+}
+
+function isLikelyModelRefusalMessage(message) {
+  const text = String(message || '').toLowerCase()
+  return /policy|safety|safe|content|copyright|disallowed|not allowed|cannot|can't|unable|violate|violation|违规|敏感|安全|版权|无法|不能/.test(text)
+}
+
+function getProxyCustomerErrorMessage(parsed, fallbackText) {
+  const providerMessage = extractProxyProviderMessage(parsed?.body)
+  const rawText = String(fallbackText || parsed?.bodyText || '').trim()
+  const candidate = String(providerMessage || rawText || '').trim()
+  if (!candidate || isStreamDisconnectedMessage(candidate)) return connectionInterruptedMessage
+  if (providerMessage && isLikelyModelRefusalMessage(providerMessage)) return providerMessage
+  if (!providerMessage && isLikelyModelRefusalMessage(rawText)) return rawText
+  return connectionInterruptedMessage
+}
+
+function normalizeProxyParsedError(parsed, customerMessage) {
+  return {
+    ...parsed,
+    body: { error: { message: customerMessage } },
+    bodyText: '',
+  }
 }
 
 function buildRefundedProxyErrorMessage(message, prefix = '生图失败，次数已退回') {
-  const friendlyMessage = normalizeProxyErrorMessage(message)
-  return friendlyMessage === streamDisconnectedMessage ? friendlyMessage : createProxyErrorMessage(prefix, friendlyMessage)
+  const text = String(message || '').trim()
+  return text === connectionInterruptedMessage ? text : createProxyErrorMessage(prefix, text)
 }
 
 function sendText(res, status, text, contentType = 'text/plain; charset=utf-8') {
@@ -638,13 +687,12 @@ async function handleImageProxy(req, res, pathname) {
     let responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
     if (!response.ok) {
       const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
-      const detail = normalizeProxyErrorMessage(rawDetail)
+      const parsed = parseProxyResponseBody(responseBuffer, responseType)
+      const detail = getProxyCustomerErrorMessage(parsed, rawDetail)
       refundCredits(chargedCard, cost)
       updateUsageLog(logId, 'refunded', detail)
-      if (detail === streamDisconnectedMessage) {
-        responseType = 'application/json; charset=utf-8'
-        responseBuffer = Buffer.from(JSON.stringify({ error: { message: detail } }))
-      }
+      responseType = 'application/json; charset=utf-8'
+      responseBuffer = Buffer.from(JSON.stringify({ error: { message: detail } }))
     } else {
       updateUsageLog(logId, 'success')
     }
@@ -657,11 +705,12 @@ async function handleImageProxy(req, res, pathname) {
     res.end(responseBuffer)
   } catch (err) {
     refundCredits(chargedCard, cost)
-    const message = normalizeProxyErrorMessage(abortMessage || (err instanceof Error ? err.message : String(err)))
+    const rawMessage = abortMessage || (err instanceof Error ? err.message : String(err))
+    const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
     updateUsageLog(logId, 'refunded', message)
     if (!res.destroyed && !res.writableEnded) {
       responseCompleted = true
-      sendJson(res, 502, { error: { message: buildRefundedProxyErrorMessage(message) } })
+      sendJson(res, 502, { error: { message } })
       return
     }
   } finally {
@@ -768,13 +817,6 @@ async function handleImageProxyTaskMode(req, res, pathname) {
 
 async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, pathname, contentType, body }) {
   const { chargedCard, codes, cost, logId } = job
-  const controller = new AbortController()
-  const timeoutSeconds = Math.max(1, Number(settings.request_timeout_seconds || 300))
-  let abortMessage = ''
-  const timeoutId = setTimeout(() => {
-    abortMessage = `请求超时：超过 ${timeoutSeconds} 秒仍未完成`
-    controller.abort()
-  }, timeoutSeconds * 1000)
 
   try {
     touchProxyJob(job, { status: 'running' })
@@ -789,7 +831,6 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
         Accept: reqAccept,
       },
       body: proxyBody,
-      signal: controller.signal,
     })
     const responseBuffer = Buffer.from(await response.arrayBuffer())
     const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
@@ -797,8 +838,8 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
 
     if (!response.ok) {
       const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
-      const detail = normalizeProxyErrorMessage(rawDetail)
-      parsed = normalizeProxyParsedError(parsed, rawDetail)
+      const detail = getProxyCustomerErrorMessage(parsed, rawDetail)
+      parsed = normalizeProxyParsedError(parsed, detail)
       refundCredits(chargedCard, cost)
       updateUsageLog(logId, 'refunded', detail)
       touchProxyJob(job, {
@@ -822,7 +863,8 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
     })
   } catch (err) {
     refundCredits(chargedCard, cost)
-    const message = normalizeProxyErrorMessage(abortMessage || (err instanceof Error ? err.message : String(err)))
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
     updateUsageLog(logId, 'refunded', message)
     touchProxyJob(job, {
       status: 'error',
@@ -833,8 +875,6 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
       errorMessage: message,
       balance: getCardsBalance(codes),
     })
-  } finally {
-    clearTimeout(timeoutId)
   }
 }
 
