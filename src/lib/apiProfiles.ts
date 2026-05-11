@@ -19,6 +19,7 @@ const DEFAULT_API_KEY = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_KEY) || 
 const DEFAULT_OPENAI_API_PROXY = true
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-pro-image-preview'
+export const DEFAULT_GROK_MODEL = 'grok-4.2-image'
 export const DEFAULT_RESPONSES_MODEL = 'gpt-5.5'
 export const DEFAULT_FAL_BASE_URL = 'https://fal.run'
 export const DEFAULT_FAL_MODEL = 'openai/gpt-image-2'
@@ -456,7 +457,7 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     model: active.model,
     timeout: active.timeout,
     apiMode: active.apiMode,
-    imageEngine: record.imageEngine === 'gemini' ? 'gemini' : 'openai',
+    imageEngine: record.imageEngine === 'gemini' ? 'gemini' : record.imageEngine === 'grok' ? 'grok' : 'openai',
     codexCli: active.codexCli,
     apiProxy: active.apiProxy,
     customProviders,
@@ -478,6 +479,7 @@ export function getCustomProviderDefinition(settings: Partial<AppSettings> | unk
 export function getApiProviderLabel(settings: Partial<AppSettings> | unknown, provider: ApiProvider): string {
   if (provider === 'fal') return 'fal.ai'
   if (provider === 'gemini') return 'Gemini'
+  if (provider === 'grok') return 'Grok'
   if (provider === 'openai') return 'OpenAI'
   return getCustomProviderDefinition(settings, provider)?.name ?? provider
 }

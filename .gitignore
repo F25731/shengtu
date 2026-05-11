@@ -9,3 +9,4 @@ tools/gemini_test_last_response.json
 tools/gemini_test_output_*.jpg
 tools/gemini_test_output_*.png
 tools/gemini_test_output_*.webp
+tools/ai6800_*

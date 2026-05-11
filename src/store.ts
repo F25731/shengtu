@@ -10,7 +10,7 @@ import type {
   ExportData,
 } from './types'
 import { DEFAULT_PARAMS } from './types'
-import { DEFAULT_GEMINI_MODEL, DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
+import { DEFAULT_GEMINI_MODEL, DEFAULT_GROK_MODEL, DEFAULT_SETTINGS, getActiveApiProfile, getCustomProviderDefinition, mergeImportedSettings, normalizeSettings, validateApiProfile } from './lib/apiProfiles'
 import { dismissAllTooltips } from './lib/tooltipDismiss'
 import {
   CURRENT_THUMBNAIL_VERSION,
@@ -743,7 +743,7 @@ export function getTaskApiProfile(settings: AppSettings, task: TaskRecord): ApiP
 
   if (task.apiProfileId) {
     const byId = normalized.profiles.find((profile) => profile.id === task.apiProfileId)
-    if (provider === 'gemini' && byId) return byId
+    if ((provider === 'gemini' || provider === 'grok') && byId) return byId
     if (byId && (!provider || byId.provider === provider)) return byId
     return null
   }
@@ -1145,10 +1145,10 @@ export async function submitTask(options: { allowFullMask?: boolean; useCurrentA
   const parentTask = getEditParentTask(orderedInputImages, latestTasks)
   const editContextPrompts = getEditContextPrompts(parentTask)
   const apiPrompt = buildContextualEditPrompt(editContextPrompts, prompt.trim())
-  const taskImageEngine = requestSettings.imageEngine === 'gemini' ? 'gemini' : 'openai'
-  const taskApiProvider = taskImageEngine === 'gemini' ? 'gemini' : activeProfile.provider
-  const taskApiProfileName = taskImageEngine === 'gemini' ? 'Gemini' : activeProfile.name
-  const taskApiModel = taskImageEngine === 'gemini' ? DEFAULT_GEMINI_MODEL : activeProfile.model
+  const taskImageEngine = requestSettings.imageEngine === 'gemini' ? 'gemini' : requestSettings.imageEngine === 'grok' ? 'grok' : 'openai'
+  const taskApiProvider = taskImageEngine === 'gemini' ? 'gemini' : taskImageEngine === 'grok' ? 'grok' : activeProfile.provider
+  const taskApiProfileName = taskImageEngine === 'gemini' ? 'Gemini' : taskImageEngine === 'grok' ? 'Grok' : activeProfile.name
+  const taskApiModel = taskImageEngine === 'gemini' ? DEFAULT_GEMINI_MODEL : taskImageEngine === 'grok' ? DEFAULT_GROK_MODEL : activeProfile.model
   const taskId = genId()
   const task: TaskRecord = {
     id: taskId,
@@ -1204,7 +1204,7 @@ async function executeTask(taskId: string) {
   const taskProvider = task.apiProvider ?? activeProfile.provider
   const apiRequestSettings = normalizeSettings({
     ...requestSettings,
-    imageEngine: taskProvider === 'gemini' ? 'gemini' : 'openai',
+    imageEngine: taskProvider === 'gemini' ? 'gemini' : taskProvider === 'grok' ? 'grok' : 'openai',
   })
   let falRequestInfo: { requestId: string; endpoint: string } | null = task.falRequestId && task.falEndpoint
     ? { requestId: task.falRequestId, endpoint: task.falEndpoint }
@@ -1414,13 +1414,14 @@ export async function retryTask(task: TaskRecord) {
   const { settings } = useStore.getState()
   const activeProfile = getActiveApiProfile(settings)
   const isGeminiTask = task.apiProvider === 'gemini'
+  const isGrokTask = task.apiProvider === 'grok'
   const retrySettings = normalizeSettings({
     ...settings,
-    imageEngine: isGeminiTask ? 'gemini' : settings.imageEngine,
+    imageEngine: isGeminiTask ? 'gemini' : isGrokTask ? 'grok' : settings.imageEngine,
   })
-  const retryProvider = isGeminiTask ? 'gemini' : activeProfile.provider
-  const retryProfileName = isGeminiTask ? 'Gemini' : activeProfile.name
-  const retryModel = isGeminiTask ? DEFAULT_GEMINI_MODEL : activeProfile.model
+  const retryProvider = isGeminiTask ? 'gemini' : isGrokTask ? 'grok' : activeProfile.provider
+  const retryProfileName = isGeminiTask ? 'Gemini' : isGrokTask ? 'Grok' : activeProfile.name
+  const retryModel = isGeminiTask ? DEFAULT_GEMINI_MODEL : isGrokTask ? DEFAULT_GROK_MODEL : activeProfile.model
   const normalizedParams = normalizeParamsForSettings(task.params, retrySettings, { hasInputImages: task.inputImageIds.length > 0 })
   const taskId = genId()
   const newTask: TaskRecord = {
@@ -1466,6 +1467,8 @@ export async function reuseConfig(task: TaskRecord) {
 
   if (task.apiProvider === 'gemini') {
     setSettings({ imageEngine: 'gemini' })
+  } else if (task.apiProvider === 'grok') {
+    setSettings({ imageEngine: 'grok' })
   } else if (task.apiProvider === 'openai') {
     setSettings({ imageEngine: 'openai' })
   }

@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback, useState, useMemo, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { useStore, submitTask, addImageFromFile, updateTaskInStore, removeMultipleTasks, getCachedImage, ensureImageCached } from '../store'
-import { DEFAULT_PARAMS } from '../types'
+import { DEFAULT_PARAMS, type ImageEngine } from '../types'
 import { getActiveApiProfile, normalizeSettings } from '../lib/apiProfiles'
 import { DEFAULT_FAL_IMAGE_SIZE, getChangedParams, getOutputImageLimitForSettings, normalizeParamsForSettings } from '../lib/paramCompatibility'
 import { normalizeImageSize } from '../lib/size'
@@ -237,8 +237,8 @@ export default function InputBar() {
   }, [hasRunningTask, hasSubmitApiConfig, showToast])
   const activeProvider = activeProfile.provider
   const isFalProvider = activeProvider === 'fal'
-  const imageEngine = settings.imageEngine === 'gemini' ? 'gemini' : 'openai'
-  const switchImageEngine = useCallback((nextEngine: 'openai' | 'gemini') => {
+  const imageEngine = settings.imageEngine === 'gemini' ? 'gemini' : settings.imageEngine === 'grok' ? 'grok' : 'openai'
+  const switchImageEngine = useCallback((nextEngine: ImageEngine) => {
     if (imageEngine === nextEngine) return
     setSettings({ imageEngine: nextEngine })
   }, [imageEngine, setSettings])
@@ -248,7 +248,7 @@ export default function InputBar() {
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nLimitHintText = isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
-    : `${imageEngine === 'gemini' ? 'Gemini' : 'ChatGPT'} 最大请求数量为 ${outputImageLimit}`
+    : `${imageEngine === 'gemini' ? 'Gemini' : imageEngine === 'grok' ? 'Grok' : 'ChatGPT'} 最大请求数量为 ${outputImageLimit}`
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
@@ -1106,6 +1106,7 @@ export default function InputBar() {
       {[
         { value: 'openai' as const, label: 'ChatGPT' },
         { value: 'gemini' as const, label: 'Gemini' },
+        { value: 'grok' as const, label: 'Grok' },
       ].map((item) => (
         <button
           key={item.value}

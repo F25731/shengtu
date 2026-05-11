@@ -158,6 +158,14 @@ async function callGeminiChatImageApiSingle(opts: CallApiOptions, profile: ApiPr
     const body = {
       model: profile.model,
       stream: false,
+      ...(useApiProxy ? {
+        yunyi_params: {
+          size: params.size,
+          quality: params.quality,
+          output_format: params.output_format,
+          n: params.n,
+        },
+      } : {}),
       messages: [
         {
           role: 'user',

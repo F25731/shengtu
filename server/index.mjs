@@ -18,8 +18,10 @@ const adminToken = createHash('sha256').update(`yunyi-admin:${adminPassword}`).d
 const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const proxyJobs = new Map()
 const proxyJobTtlMs = 6 * 60 * 60 * 1000
+const ai6800PollIntervalMs = 5 * 1000
+const ai6800MaxPollMs = 30 * 60 * 1000
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
-const defaultGateNoticeText = '云逸生图支持 ChatGPT 与 Gemini 生图，可上传参考图继续修改，并保留历史记录用于预览和下载。请输入卡密开始使用。'
+const defaultGateNoticeText = '云逸生图支持 ChatGPT、Gemini 与 Grok 生图，可上传参考图继续修改，并保留历史记录用于预览和下载。请输入卡密开始使用。'
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -103,8 +105,14 @@ function initDatabase() {
     purchase_url: process.env.YUNYI_PURCHASE_URL || '',
     backgrace_api_url: process.env.BACKGRACE_API_URL || 'https://backgrace.com/v1',
     backgrace_api_key: process.env.BACKGRACE_API_KEY || '',
+    ai6800_api_url: process.env.AI6800_API_URL || 'https://api.ai6800.com',
+    ai6800_api_key: process.env.AI6800_API_KEY || '',
+    chatgpt_provider: process.env.YUNYI_CHATGPT_PROVIDER || 'backgrace',
+    gemini_provider: process.env.YUNYI_GEMINI_PROVIDER || 'backgrace',
+    grok_provider: process.env.YUNYI_GROK_PROVIDER || 'ai6800',
     image_model: process.env.YUNYI_IMAGE_MODEL || 'gpt-image-2',
     gemini_model: process.env.YUNYI_GEMINI_MODEL || 'gemini-3-pro-image-preview',
+    grok_model: process.env.YUNYI_GROK_MODEL || 'grok-4.2-image',
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
     max_concurrent_generations: process.env.YUNYI_MAX_CONCURRENT_GENERATIONS || '20',
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
@@ -124,7 +132,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'image_model', 'gemini_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
@@ -532,16 +540,116 @@ function extractImageCount(contentType, body) {
   return 1
 }
 
-function buildProxyBody(contentType, body, settings, apiPath) {
+function getTextFieldFromMultipart(contentType, body, fieldName) {
+  if (!contentType.includes('multipart/form-data')) return ''
+  const text = body.toString('utf8')
+  const escaped = fieldName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = text.match(new RegExp(`name="${escaped}"\\r?\\n\\r?\\n([\\s\\S]*?)\\r?\\n--`))
+  return match?.[1]?.trim() || ''
+}
+
+function parseMultipartBody(contentType, body) {
+  const boundary = String(contentType.match(/boundary=([^;]+)/i)?.[1] || '').trim().replace(/^"|"$/g, '')
+  const result = { fields: {}, images: [] }
+  if (!boundary) return result
+
+  const delimiter = Buffer.from(`--${boundary}`)
+  let cursor = body.indexOf(delimiter)
+  while (cursor >= 0) {
+    const next = body.indexOf(delimiter, cursor + delimiter.length)
+    if (next < 0) break
+    let part = body.slice(cursor + delimiter.length, next)
+    cursor = next
+    if (part.length >= 2 && part[0] === 13 && part[1] === 10) part = part.slice(2)
+    if (part.length >= 2 && part[part.length - 2] === 13 && part[part.length - 1] === 10) part = part.slice(0, -2)
+    const headerEnd = part.indexOf(Buffer.from('\r\n\r\n'))
+    if (headerEnd < 0) continue
+    const headers = part.slice(0, headerEnd).toString('utf8')
+    const value = part.slice(headerEnd + 4)
+    const name = headers.match(/name="([^"]+)"/i)?.[1] || ''
+    const filename = headers.match(/filename="([^"]*)"/i)?.[1] || ''
+    const mime = headers.match(/content-type:\s*([^\r\n]+)/i)?.[1]?.trim() || ''
+    if (!name) continue
+    if (filename || mime.startsWith('image/')) {
+      if (mime.startsWith('image/') && value.length) result.images.push(`data:${mime};base64,${value.toString('base64')}`)
+    } else {
+      result.fields[name] = value.toString('utf8').trim()
+    }
+  }
+  return result
+}
+
+function extractRequestModel(contentType, body) {
+  try {
+    if (contentType.includes('application/json')) {
+      const data = parseJsonBody(body)
+      return typeof data.model === 'string' ? data.model : ''
+    }
+    return getTextFieldFromMultipart(contentType, body, 'model')
+  } catch {
+    return ''
+  }
+}
+
+function getProxyModelKind(apiPath, contentType, body) {
+  const path = `/${String(apiPath || '').replace(/^\/+/, '')}`
+  if (path.includes('/chat/completions')) return 'gemini'
+  const model = extractRequestModel(contentType, body).toLowerCase()
+  if (model.includes('grok')) return 'grok'
+  if (model.includes('gemini')) return 'gemini'
+  return 'chatgpt'
+}
+
+function normalizeProviderId(value, fallback = 'backgrace') {
+  const provider = String(value || '').trim().toLowerCase()
+  return provider === 'ai6800' ? 'ai6800' : provider === 'backgrace' ? 'backgrace' : fallback
+}
+
+function getModelForKind(settings, kind) {
+  if (kind === 'gemini') return String(settings.gemini_model || 'gemini-3-pro-image-preview').trim()
+  if (kind === 'grok') return String(settings.grok_model || 'grok-4.2-image').trim()
+  return String(settings.image_model || 'gpt-image-2').trim()
+}
+
+function resolveProxyRoute(settings, pathname, contentType, body) {
+  const kind = getProxyModelKind(pathname, contentType, body)
+  const providerSetting = kind === 'gemini'
+    ? settings.gemini_provider
+    : kind === 'grok'
+      ? settings.grok_provider
+      : settings.chatgpt_provider
+  const provider = normalizeProviderId(providerSetting, kind === 'grok' ? 'ai6800' : 'backgrace')
+  if (provider === 'ai6800') {
+    return {
+      kind,
+      provider,
+      model: getModelForKind(settings, kind),
+      apiUrl: String(settings.ai6800_api_url || 'https://api.ai6800.com').replace(/\/+$/, ''),
+      apiKey: String(settings.ai6800_api_key || '').trim(),
+    }
+  }
+  return {
+    kind,
+    provider: 'backgrace',
+    model: getModelForKind(settings, kind),
+    apiUrl: String(settings.backgrace_api_url || 'https://backgrace.com/v1').replace(/\/+$/, ''),
+    apiKey: String(settings.backgrace_api_key || '').trim(),
+  }
+}
+
+function buildProxyBody(contentType, body, settings, apiPath, modelKind = '') {
   if (!contentType.includes('application/json')) return body
   try {
     const data = parseJsonBody(body)
     const path = `/${String(apiPath || '').replace(/^\/+/, '')}`
     if (path.includes('/chat/completions')) {
       if (settings.gemini_model) data.model = settings.gemini_model
+    } else if (modelKind === 'grok' && settings.grok_model) {
+      data.model = settings.grok_model
     } else if (settings.image_model) {
       data.model = settings.image_model
     }
+    delete data.yunyi_params
     if (path.includes('/images/')) data.response_format = 'b64_json'
     return Buffer.from(JSON.stringify(data))
   } catch {
@@ -726,16 +834,16 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     return
   }
   const settings = getSettings()
-  const apiKey = String(settings.backgrace_api_key || '').trim()
-  const apiUrl = String(settings.backgrace_api_url || 'https://backgrace.com/v1').replace(/\/+$/, '')
   const baseCost = Math.max(1, Number(settings.cost_per_generation || 1))
-  if (!apiKey) {
-    sendJson(res, 503, { error: { message: '生图服务暂未完成后台配置，请稍后再试' } })
-    return
-  }
 
   const contentType = String(req.headers['content-type'] || '')
   const body = await readBody(req)
+  const route = resolveProxyRoute(settings, pathname, contentType, body)
+  if (!route.apiKey) {
+    const providerName = route.provider === 'ai6800' ? 'ai6800' : 'BackGrace'
+    sendJson(res, 503, { error: { message: `生图服务暂未完成后台配置，请填写 ${providerName} API Key 后再试` } })
+    return
+  }
   const prompt = extractPrompt(contentType, body)
   const imageCount = Math.max(1, extractImageCount(contentType, body))
   const cost = baseCost * imageCount
@@ -803,11 +911,11 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     balance: getCardsBalance(codes),
   })
 
-  runImageProxyJob(job, {
+  const runner = route.provider === 'ai6800' ? runAi6800ProxyJob : runImageProxyJob
+  runner(job, {
     reqAccept: String(req.headers.accept || 'application/json'),
     settings,
-    apiKey,
-    apiUrl,
+    route,
     pathname,
     contentType,
     body,
@@ -817,18 +925,18 @@ async function handleImageProxyTaskMode(req, res, pathname) {
   })
 }
 
-async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, pathname, contentType, body }) {
+async function runImageProxyJob(job, { reqAccept, settings, route, pathname, contentType, body }) {
   const { chargedCard, codes, cost, logId } = job
 
   try {
     touchProxyJob(job, { status: 'running' })
     const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
-    const targetUrl = `${apiUrl}/${apiPath}`
-    const proxyBody = buildProxyBody(contentType, body, settings, pathname)
+    const targetUrl = `${route.apiUrl}/${apiPath}`
+    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route.kind)
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        Authorization: `Bearer ${route.apiKey}`,
         'Content-Type': contentType || 'application/json',
         Accept: reqAccept,
       },
@@ -861,6 +969,290 @@ async function runImageProxyJob(job, { reqAccept, settings, apiKey, apiUrl, path
       httpStatus: response.status,
       contentType: responseType,
       ...parsed,
+      balance: getCardsBalance(codes),
+    })
+  } catch (err) {
+    refundCredits(chargedCard, cost)
+    const rawMessage = err instanceof Error ? err.message : String(err)
+    const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
+    updateUsageLog(logId, 'refunded', message)
+    touchProxyJob(job, {
+      status: 'error',
+      httpStatus: 502,
+      contentType: 'application/json; charset=utf-8',
+      body: { error: { message: buildRefundedProxyErrorMessage(message) } },
+      bodyText: '',
+      errorMessage: message,
+      balance: getCardsBalance(codes),
+    })
+  }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function extractTaskIdFromPayload(payload) {
+  if (!payload || typeof payload !== 'object') return ''
+  const direct = payload.task_id ?? payload.taskId ?? payload.id
+  if (direct != null && String(direct).trim()) return String(direct).trim()
+  for (const value of Object.values(payload)) {
+    if (value && typeof value === 'object') {
+      const found = extractTaskIdFromPayload(value)
+      if (found) return found
+    }
+  }
+  return ''
+}
+
+function collectImageStrings(value, output = []) {
+  if (!value) return output
+  if (typeof value === 'string') {
+    if (/^(data:image\/|https?:\/\/)/i.test(value.trim())) output.push(value.trim())
+    return output
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectImageStrings(item, output)
+    return output
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) collectImageStrings(item, output)
+  }
+  return output
+}
+
+function extractAi6800ResultUrls(payload) {
+  return [...new Set(collectImageStrings(payload))]
+}
+
+function readJsonRequestData(contentType, body) {
+  if (!contentType.includes('application/json')) return {}
+  try {
+    return parseJsonBody(body)
+  } catch {
+    return {}
+  }
+}
+
+function getRequestParams(contentType, body) {
+  if (contentType.includes('application/json')) {
+    const data = readJsonRequestData(contentType, body)
+    return data.yunyi_params && typeof data.yunyi_params === 'object' ? data.yunyi_params : data
+  }
+  return parseMultipartBody(contentType, body).fields
+}
+
+function parseSizeRatio(size) {
+  const match = String(size || '').match(/^(\d+)x(\d+)$/)
+  if (!match) return null
+  const width = Number(match[1])
+  const height = Number(match[2])
+  if (!width || !height) return null
+  return { width, height, ratio: width / height }
+}
+
+function getGeminiAspectRatio(size) {
+  const parsed = parseSizeRatio(size)
+  if (!parsed) return '1:1'
+  const options = [
+    ['1:1', 1],
+    ['2:3', 2 / 3],
+    ['3:2', 3 / 2],
+    ['3:4', 3 / 4],
+    ['4:3', 4 / 3],
+    ['9:16', 9 / 16],
+    ['16:9', 16 / 9],
+  ]
+  return options.reduce((best, item) =>
+    Math.abs(item[1] - parsed.ratio) < Math.abs(best[1] - parsed.ratio) ? item : best,
+  )[0]
+}
+
+function getGeminiImageSize(size, quality) {
+  const parsed = parseSizeRatio(size)
+  if (!parsed) return quality === 'high' ? '2K' : '1K'
+  const max = Math.max(parsed.width, parsed.height)
+  if (max >= 2800) return '4K'
+  if (max >= 1600) return '2K'
+  return '1K'
+}
+
+function getGrokSize(size) {
+  const allowed = new Set([
+    '1024x1024', '1080x1080', '1200x1200', '2048x2048', '2160x2160',
+    '1280x720', '1366x768', '1600x900', '1920x1080', '2048x1152', '2560x1440',
+    '1024x768', '1280x960', '2048x1536', '720x1280', '768x1366', '900x1600',
+    '1080x1920', '1440x2560',
+  ])
+  const text = String(size || '')
+  if (allowed.has(text)) return text
+  const parsed = parseSizeRatio(text)
+  if (!parsed) return '1024x1024'
+  if (parsed.ratio > 1.2) return '1280x720'
+  if (parsed.ratio < 0.85) return '720x1280'
+  return '1024x1024'
+}
+
+function buildAi6800SubmitPayload({ route, contentType, body, prompt }) {
+  const params = getRequestParams(contentType, body)
+  const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
+  const jsonData = readJsonRequestData(contentType, body)
+  const images = [
+    ...collectImageStrings(jsonData.images),
+    ...collectImageStrings(jsonData.input),
+    ...collectImageStrings(jsonData.messages),
+    ...multipart.images,
+  ].slice(0, route.kind === 'grok' ? 1 : route.kind === 'gemini' ? 14 : 10)
+  const size = String(params.size || 'auto')
+  const quality = String(params.quality || 'auto')
+
+  if (route.kind === 'gemini') {
+    return {
+      model: route.model,
+      prompt,
+      params: {
+        aspectRatio: String(params.aspectRatio || getGeminiAspectRatio(size)),
+        imageSize: String(params.imageSize || getGeminiImageSize(size, quality)),
+        ...(images.length ? { images } : {}),
+      },
+    }
+  }
+
+  if (route.kind === 'grok') {
+    return {
+      model: route.model,
+      prompt,
+      size: getGrokSize(size),
+      n: 1,
+      response_format: 'url',
+      ...(images.length ? { images } : {}),
+    }
+  }
+
+  return {
+    model: route.model,
+    prompt,
+    size,
+    quality,
+    background: String(params.background || 'opaque'),
+    n: Math.max(1, Number(params.n || 1)),
+    ...(images.length ? { images } : {}),
+  }
+}
+
+async function fetchAi6800Json(url, route, options = {}) {
+  const headers = {
+    Authorization: `Bearer ${route.apiKey}`,
+    Accept: 'application/json',
+    ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+    ...(options.headers || {}),
+  }
+  for (const key of Object.keys(headers)) {
+    if (headers[key] == null) delete headers[key]
+  }
+  const response = await fetch(url, {
+    ...options,
+    headers,
+  })
+  const text = await response.text()
+  let json = {}
+  try {
+    json = text ? JSON.parse(text) : {}
+  } catch {
+    json = { message: text }
+  }
+  if (!response.ok) {
+    const message = getProxyCustomerErrorMessage({ body: json, bodyText: text }, text)
+    throw new Error(message)
+  }
+  if (json && typeof json === 'object' && 'code' in json && Number(json.code) !== 0) {
+    throw new Error(String(json.msg || json.message || '中转站请求失败'))
+  }
+  return json
+}
+
+async function pollAi6800Task(route, taskId) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < ai6800MaxPollMs) {
+    const url = `${route.apiUrl}/v1/media/status?task_id=${encodeURIComponent(taskId)}`
+    const status = await fetchAi6800Json(url, route, { method: 'GET', headers: { 'Content-Type': undefined } })
+    const isFinal = status?.is_final === true || status?.is_final === 'true'
+    const state = String(status?.state || '').toLowerCase()
+    if (isFinal || state === 'success' || state === 'failed') return status
+    await sleep(ai6800PollIntervalMs)
+  }
+  throw new Error('任务生成时间较长，请稍后刷新或重试')
+}
+
+function dataUrlToImagePayload(dataUrl) {
+  const match = String(dataUrl).match(/^data:([^;,]+);base64,(.+)$/i)
+  if (!match) return null
+  return { mime: match[1], b64Json: match[2] }
+}
+
+async function downloadImagePayload(url) {
+  if (/^data:image\//i.test(url)) return dataUrlToImagePayload(url)
+  const response = await fetch(url, { headers: { Accept: 'image/*,*/*' } })
+  if (!response.ok) throw new Error(`结果图片下载失败: HTTP ${response.status}`)
+  const buffer = Buffer.from(await response.arrayBuffer())
+  return {
+    mime: response.headers.get('content-type') || 'image/png',
+    b64Json: buffer.toString('base64'),
+  }
+}
+
+function buildAi6800SuccessBody(route, imagePayloads, resultUrls) {
+  if (route.kind === 'gemini') {
+    return {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: imagePayloads.map((item) => `![image](data:${item.mime};base64,${item.b64Json})`).join('\n'),
+          },
+        },
+      ],
+    }
+  }
+  return {
+    data: imagePayloads.map((item, index) => ({
+      b64_json: item.b64Json,
+      url: resultUrls[index] || '',
+    })),
+  }
+}
+
+async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, body }) {
+  const { chargedCard, codes, cost, logId, prompt } = job
+  try {
+    touchProxyJob(job, { status: 'running' })
+    const submitPayload = buildAi6800SubmitPayload({ route, contentType, body, prompt })
+    const submit = await fetchAi6800Json(`${route.apiUrl}/v1/media/generate`, route, {
+      method: 'POST',
+      body: JSON.stringify(submitPayload),
+    })
+    const taskId = extractTaskIdFromPayload(submit)
+    if (!taskId) throw new Error('中转站没有返回 task_id')
+    const finalStatus = await pollAi6800Task(route, taskId)
+    const state = String(finalStatus?.state || '').toLowerCase()
+    if (state === 'failed') {
+      throw new Error(String(finalStatus?.error || finalStatus?.status || '生成失败'))
+    }
+    const resultUrls = extractAi6800ResultUrls(finalStatus)
+    if (!resultUrls.length) throw new Error('中转站完成任务但没有返回图片地址')
+    const imagePayloads = []
+    for (const url of resultUrls) {
+      const image = await downloadImagePayload(url)
+      if (image) imagePayloads.push(image)
+    }
+    if (!imagePayloads.length) throw new Error('结果图片下载失败')
+    updateUsageLog(logId, 'success')
+    touchProxyJob(job, {
+      status: 'success',
+      httpStatus: 200,
+      contentType: 'application/json; charset=utf-8',
+      body: buildAi6800SuccessBody(route, imagePayloads, resultUrls),
+      bodyText: '',
       balance: getCardsBalance(codes),
     })
   } catch (err) {
@@ -978,13 +1370,18 @@ async function handleAdmin(req, res, pathname, searchParams) {
   if (pathname === '/api/admin/settings') {
     if (req.method === 'GET') {
       const settings = getSettings()
-      sendJson(res, 200, { ...settings, backgrace_api_key: settings.backgrace_api_key ? '********' : '' })
+      sendJson(res, 200, {
+        ...settings,
+        backgrace_api_key: settings.backgrace_api_key ? '********' : '',
+        ai6800_api_key: settings.ai6800_api_key ? '********' : '',
+      })
       return
     }
     if (req.method === 'POST') {
       const input = parseJsonBody(await readBody(req, 1024 * 1024))
       const current = getSettings()
       if (input.backgrace_api_key === '********') input.backgrace_api_key = current.backgrace_api_key || ''
+      if (input.ai6800_api_key === '********') input.ai6800_api_key = current.ai6800_api_key || ''
       setSettings(input)
       sendJson(res, 200, { ok: true })
       return
