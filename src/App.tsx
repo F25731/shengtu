@@ -19,6 +19,42 @@ import { readCachedCardBalance, readCardBalance, readClientConfig, type CardBala
 const BALANCE_REFRESH_INTERVAL_MS = 30_000
 const BUSY_BALANCE_REFRESH_INTERVAL_MS = 3_000
 
+function areClientConfigsEqual(a: ClientConfig, b: ClientConfig) {
+  return (
+    a.purchaseUrl === b.purchaseUrl &&
+    a.costPerGeneration === b.costPerGeneration &&
+    a.announcementText === b.announcementText &&
+    a.gateNoticeText === b.gateNoticeText
+  )
+}
+
+function areCardBalancesEqual(a: CardBalance, b: CardBalance) {
+  if (
+    a.totalRemaining !== b.totalRemaining ||
+    a.hasBusyCard !== b.hasBusyCard ||
+    a.availableForGeneration !== b.availableForGeneration ||
+    a.cards.length !== b.cards.length
+  ) {
+    return false
+  }
+
+  return a.cards.every((card, index) => {
+    const next = b.cards[index]
+    return (
+      card.code === next.code &&
+      card.totalCredits === next.totalCredits &&
+      card.usedCredits === next.usedCredits &&
+      card.remainingCredits === next.remainingCredits &&
+      card.status === next.status &&
+      card.batchName === next.batchName &&
+      card.activatedAt === next.activatedAt &&
+      card.createdAt === next.createdAt &&
+      card.updatedAt === next.updatedAt &&
+      card.busy === next.busy
+    )
+  })
+}
+
 export default function App() {
   const setSettings = useStore((s) => s.setSettings)
   const [cardReady, setCardReady] = useState(false)
@@ -35,8 +71,8 @@ export default function App() {
         readCardBalance(),
         readClientConfig(),
       ])
-      setBalance(nextBalance)
-      setClientConfig(nextConfig)
+      setBalance((current) => (areCardBalancesEqual(current, nextBalance) ? current : nextBalance))
+      setClientConfig((current) => (areClientConfigsEqual(current, nextConfig) ? current : nextConfig))
     } catch {
       // Keep the cached balance visible if the network is temporarily unavailable.
     } finally {

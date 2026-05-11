@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { memo, useEffect, useState, useRef } from 'react'
 import type { TaskRecord } from '../types'
 import { useStore, ensureImageThumbnailCached, subscribeImageThumbnail, retryTask } from '../store'
 import { formatImageRatio } from '../lib/size'
@@ -13,7 +13,7 @@ interface Props {
   isSelected?: boolean
 }
 
-export default function TaskCard({
+function TaskCard({
   task,
   onReuse,
   onEditOutputs,
@@ -331,6 +331,7 @@ export default function TaskCard({
                 data-image-id={task.outputImages[0]}
                 className="saveable-image w-full h-full object-cover"
                 loading="lazy"
+                decoding="async"
                 alt=""
               />
               {task.outputImages.length > 1 && (
@@ -511,3 +512,5 @@ export default function TaskCard({
     </div>
   )
 }
+
+export default memo(TaskCard)

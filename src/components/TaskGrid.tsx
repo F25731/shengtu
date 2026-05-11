@@ -1,8 +1,18 @@
-import { useMemo, useRef, useState, useEffect } from 'react'
+import { memo, useCallback, useMemo, useRef, useState, useEffect } from 'react'
 import { useStore, reuseConfig, editOutputs, removeTask } from '../store'
 import TaskCard from './TaskCard'
 
-export default function TaskGrid() {
+const GRID_GAP_PX = 16
+const DEFAULT_ROW_HEIGHT_PX = 160
+const OVERSCAN_ROWS = 4
+
+function getColumnCount(width: number) {
+  if (width >= 1024) return 3
+  if (width >= 640) return 2
+  return 1
+}
+
+function TaskGrid() {
   const tasks = useStore((s) => s.tasks)
   const searchQuery = useStore((s) => s.searchQuery)
   const filterStatus = useStore((s) => s.filterStatus)
@@ -15,6 +25,9 @@ export default function TaskGrid() {
   const rootRef = useRef<HTMLDivElement>(null)
   const gridRef = useRef<HTMLDivElement>(null)
   const [selectionBox, setSelectionBox] = useState<{ startPageX: number; startPageY: number; currentPageX: number; currentPageY: number } | null>(null)
+  const [columns, setColumns] = useState(1)
+  const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_HEIGHT_PX)
+  const [visibleRows, setVisibleRows] = useState({ start: 0, end: 18 })
   const isDragging = useRef(false)
   const dragStart = useRef<{ pageX: number; pageY: number } | null>(null)
   const lastClientPoint = useRef<{ x: number; y: number } | null>(null)
@@ -44,6 +57,17 @@ export default function TaskGrid() {
     })
   }, [tasks, searchQuery, filterStatus, filterFavorite])
 
+  const totalRows = Math.ceil(filteredTasks.length / columns)
+  const startRow = Math.min(visibleRows.start, Math.max(0, totalRows - 1))
+  const endRow = Math.min(Math.max(visibleRows.end, startRow + 1), Math.max(1, totalRows))
+  const startIndex = startRow * columns
+  const endIndex = Math.min(filteredTasks.length, endRow * columns)
+  const visibleTasks = useMemo(() => filteredTasks.slice(startIndex, endIndex), [endIndex, filteredTasks, startIndex])
+  const visibleRowCount = Math.ceil(visibleTasks.length / columns)
+  const rowStride = rowHeight + GRID_GAP_PX
+  const topSpacerHeight = startRow * rowStride
+  const bottomSpacerHeight = Math.max(0, totalRows - startRow - visibleRowCount) * rowStride
+
   const handleDelete = (task: typeof tasks[0]) => {
     setConfirmDialog({
       title: '删除记录',
@@ -51,6 +75,75 @@ export default function TaskGrid() {
       action: () => removeTask(task),
     })
   }
+
+  const updateVirtualWindow = useCallback(() => {
+    const root = rootRef.current
+    if (!root) return
+
+    const nextColumns = getColumnCount(root.clientWidth)
+    setColumns((current) => (current === nextColumns ? current : nextColumns))
+
+    const rect = root.getBoundingClientRect()
+    const rootTop = rect.top + window.scrollY
+    const viewportTop = window.scrollY
+    const viewportBottom = viewportTop + window.innerHeight
+    const nextTotalRows = Math.ceil(filteredTasks.length / nextColumns)
+    const stride = rowHeight + GRID_GAP_PX
+    const nextStart = Math.max(0, Math.floor((viewportTop - rootTop) / stride) - OVERSCAN_ROWS)
+    const nextEnd = Math.min(
+      Math.max(1, nextTotalRows),
+      Math.ceil((viewportBottom - rootTop) / stride) + OVERSCAN_ROWS,
+    )
+
+    setVisibleRows((current) => (
+      current.start === nextStart && current.end === nextEnd ? current : { start: nextStart, end: nextEnd }
+    ))
+  }, [filteredTasks.length, rowHeight])
+
+  useEffect(() => {
+    updateVirtualWindow()
+  }, [updateVirtualWindow])
+
+  useEffect(() => {
+    let frameId = 0
+    const scheduleUpdate = () => {
+      if (frameId) return
+      frameId = window.requestAnimationFrame(() => {
+        frameId = 0
+        updateVirtualWindow()
+      })
+    }
+
+    const observer = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(scheduleUpdate) : null
+    if (rootRef.current) observer?.observe(rootRef.current)
+    window.addEventListener('scroll', scheduleUpdate, { passive: true })
+    window.addEventListener('resize', scheduleUpdate)
+
+    return () => {
+      if (frameId) window.cancelAnimationFrame(frameId)
+      observer?.disconnect()
+      window.removeEventListener('scroll', scheduleUpdate)
+      window.removeEventListener('resize', scheduleUpdate)
+    }
+  }, [updateVirtualWindow])
+
+  useEffect(() => {
+    const firstCard = gridRef.current?.querySelector('.task-card-wrapper') as HTMLElement | null
+    if (!firstCard) return
+
+    const measure = () => {
+      const height = firstCard.getBoundingClientRect().height
+      if (height > 0) {
+        setRowHeight((current) => (Math.abs(current - height) > 4 ? height : current))
+      }
+    }
+
+    measure()
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver(measure)
+    observer.observe(firstCard)
+    return () => observer.disconnect()
+  }, [columns, visibleTasks.length, visibleRows.start])
 
   const getPagePoint = (clientX: number, clientY: number) => ({
     pageX: clientX + window.scrollX,
@@ -286,8 +379,9 @@ export default function TaskGrid() {
       data-task-grid-root
       className="relative min-h-[50vh]"
     >
-      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 pb-10">
-        {filteredTasks.map((task) => (
+      {topSpacerHeight > 0 && <div aria-hidden="true" style={{ height: topSpacerHeight }} />}
+      <div ref={gridRef} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {visibleTasks.map((task) => (
           <div key={task.id} className="task-card-wrapper" data-task-id={task.id}>
             <TaskCard
               task={task}
@@ -315,6 +409,7 @@ export default function TaskGrid() {
           </div>
         ))}
       </div>
+      {bottomSpacerHeight > 0 && <div aria-hidden="true" style={{ height: bottomSpacerHeight }} />}
       {selectionBox && (
         <div
           className="fixed bg-blue-500/20 border border-blue-500/50 pointer-events-none z-[30]"
@@ -329,3 +424,5 @@ export default function TaskGrid() {
     </div>
   )
 }
+
+export default memo(TaskGrid)
