@@ -13,6 +13,13 @@ interface Props {
   isSelected?: boolean
 }
 
+function getTaskAiLabel(task: TaskRecord) {
+  const text = `${task.apiProvider || ''} ${task.apiProfileName || ''} ${task.apiModel || ''}`.toLowerCase()
+  if (text.includes('gemini')) return { label: 'Gemini', className: 'bg-purple-500/10 text-purple-500 dark:text-purple-300' }
+  if (text.includes('grok')) return { label: 'Grok', className: 'bg-sky-500/10 text-sky-500 dark:text-sky-300' }
+  return { label: 'ChatGPT', className: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-300' }
+}
+
 function TaskCard({
   task,
   onReuse,
@@ -204,6 +211,7 @@ function TaskCard({
 
   const nDisplay = getParamDisplay(task, 'n')
   const showN = task.params.n > 1 || nDisplay.isMismatch
+  const aiLabel = getTaskAiLabel(task)
 
   return (
     <div className="relative rounded-xl">
@@ -398,6 +406,9 @@ function TaskCard({
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
+              <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${aiLabel.className}`}>
+                {aiLabel.label}
+              </span>
               {/* Mask */}
               {task.maskImageId && (
                 <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
