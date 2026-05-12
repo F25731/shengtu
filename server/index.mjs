@@ -24,6 +24,7 @@ const configuredTempImageTtlMs = Number(process.env.YUNYI_TEMP_IMAGE_TTL_MS || p
 const configuredTempImageCleanupIntervalMs = Number(process.env.YUNYI_TEMP_IMAGE_CLEANUP_INTERVAL_MS || 10 * 60 * 1000)
 const tempImageTtlMs = Number.isFinite(configuredTempImageTtlMs) && configuredTempImageTtlMs > 0 ? configuredTempImageTtlMs : proxyJobTtlMs
 const tempImageCleanupIntervalMs = Number.isFinite(configuredTempImageCleanupIntervalMs) && configuredTempImageCleanupIntervalMs > 0 ? configuredTempImageCleanupIntervalMs : 10 * 60 * 1000
+let lastTempImageCleanupAt = 0
 const ai6800PollIntervalMs = 5 * 1000
 const ai6800MaxPollMs = 30 * 60 * 1000
 const defaultInputImageLimit = 16
@@ -46,7 +47,7 @@ const mimeTypes = {
 
 mkdirSync(dataDir, { recursive: true })
 mkdirSync(tempImageDir, { recursive: true })
-cleanupExpiredTempImages()
+cleanupExpiredTempImages({ force: true })
 
 const SQL = await initSqlJs({
   locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm'),
@@ -554,8 +555,10 @@ function cleanupTempFiles(files = []) {
   files.length = 0
 }
 
-function cleanupExpiredTempImages() {
+function cleanupExpiredTempImages({ force = false } = {}) {
   const now = Date.now()
+  if (!force && now - lastTempImageCleanupAt < tempImageCleanupIntervalMs) return
+  lastTempImageCleanupAt = now
   const activePaths = new Set()
   for (const job of proxyJobs.values()) {
     for (const file of job.tempFiles || []) {
@@ -1166,144 +1169,6 @@ function serveTempImage(req, res, pathname) {
   createReadStream(filePath).pipe(res)
 }
 
-async function handleImageProxy(req, res, pathname) {
-  if (req.method !== 'POST') {
-    sendJson(res, 405, { error: { message: 'Method not allowed' } })
-    return
-  }
-  const settings = getSettings()
-  const apiKey = String(settings.backgrace_api_key || '').trim()
-  const apiUrl = String(settings.backgrace_api_url || 'https://backgrace.com/v1').replace(/\/+$/, '')
-  const baseCost = Math.max(1, Number(settings.cost_per_generation || 1))
-  if (!apiKey) {
-    sendJson(res, 503, { error: { message: '生图服务暂未完成后台配置' } })
-    return
-  }
-
-  const contentType = String(req.headers['content-type'] || '')
-  const body = await readBody(req)
-  const prompt = extractPrompt(contentType, body)
-  const imageCount = Math.max(1, extractImageCount(contentType, body))
-  const cost = baseCost * imageCount
-
-  const codes = parseCardsHeader(req)
-  if (!codes.length) {
-    sendJson(res, 402, { error: { message: '请先输入卡密' } })
-    return
-  }
-  const blockedWord = findBlockedWord(prompt, settings)
-  if (blockedWord) {
-    sendJson(res, 400, {
-      error: { message: '提示词包含平台不支持的内容，请调整后再提交' },
-      code: 'prompt_blocked',
-      balance: getCardsBalance(codes),
-    })
-    return
-  }
-
-  const maxConcurrentJobs = getMaxConcurrentProxyJobs(settings)
-  const activeJobs = getActiveProxyJobs()
-  if (maxConcurrentJobs > 0 && activeJobs.length >= maxConcurrentJobs) {
-    sendJson(res, 429, {
-      error: { message: '当前生成队列较忙，请稍后再试' },
-      code: 'server_busy',
-      balance: getCardsBalance(codes),
-    })
-    return
-  }
-
-  const busyCodes = getBusyCardCodes(codes)
-  const availableCodes = codes.filter((code) => !busyCodes.has(code))
-  if (!availableCodes.length && busyCodes.size > 0) {
-    sendJson(res, 429, {
-      error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
-      code: 'card_busy',
-      balance: getCardsBalance(codes),
-    })
-    return
-  }
-
-  const chargedCard = deductCredits(availableCodes, cost)
-  if (!chargedCard) {
-    const balance = getCardsBalance(codes)
-    if (busyCodes.size > 0 && balance.cards.some((card) => card.busy && card.remainingCredits >= cost)) {
-      sendJson(res, 429, {
-        error: { message: '当前卡密已有任务正在生成，请完成后再提交' },
-        code: 'card_busy',
-        balance,
-      })
-      return
-    }
-    sendJson(res, 402, { error: { message: '卡密次数不足，请购买或添加卡密' } })
-    return
-  }
-
-  const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
-
-  const controller = new AbortController()
-  const timeoutSeconds = Math.max(1, Number(settings.request_timeout_seconds || 300))
-  let abortMessage = ''
-  let responseCompleted = false
-  const abortProxy = (message) => {
-    if (responseCompleted || controller.signal.aborted) return
-    abortMessage = message
-    controller.abort()
-  }
-  const timeoutId = setTimeout(() => {
-    abortProxy(`请求超时：超过 ${timeoutSeconds} 秒仍未完成`)
-  }, timeoutSeconds * 1000)
-  res.on('close', () => {
-    if (!responseCompleted) abortProxy('客户端已断开连接或前端请求超时')
-  })
-
-  try {
-    const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
-    const targetUrl = `${apiUrl}/${apiPath}`
-    const proxyBody = buildProxyBody(contentType, body, settings, pathname)
-    const response = await fetch(targetUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': contentType || 'application/json',
-        Accept: String(req.headers.accept || 'application/json'),
-      },
-      body: proxyBody,
-      signal: controller.signal,
-    })
-    let responseBuffer = Buffer.from(await response.arrayBuffer())
-    let responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
-    if (!response.ok) {
-      const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
-      const parsed = parseProxyResponseBody(responseBuffer, responseType)
-      const detail = getProxyCustomerErrorMessage(parsed, rawDetail)
-      refundCredits(chargedCard, cost)
-      updateUsageLog(logId, 'refunded', detail)
-      responseType = 'application/json; charset=utf-8'
-      responseBuffer = Buffer.from(JSON.stringify({ error: { message: detail } }))
-    } else {
-      updateUsageLog(logId, 'success')
-    }
-    res.writeHead(response.status, {
-      'Content-Type': responseType,
-      'Cache-Control': 'no-store',
-      'X-YunYi-Balance': String(getCardsBalance(codes).totalRemaining),
-    })
-    responseCompleted = true
-    res.end(responseBuffer)
-  } catch (err) {
-    refundCredits(chargedCard, cost)
-    const rawMessage = abortMessage || (err instanceof Error ? err.message : String(err))
-    const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
-    updateUsageLog(logId, 'refunded', message)
-    if (!res.destroyed && !res.writableEnded) {
-      responseCompleted = true
-      sendJson(res, 502, { error: { message } })
-      return
-    }
-  } finally {
-    clearTimeout(timeoutId)
-  }
-}
 
 async function handleImageProxyTaskMode(req, res, pathname) {
   if (req.method !== 'POST') {
@@ -2017,7 +1882,10 @@ const server = http.createServer(async (req, res) => {
   }
 })
 
-const tempImageCleanupTimer = setInterval(() => cleanupProxyJobs(), tempImageCleanupIntervalMs)
+const tempImageCleanupTimer = setInterval(() => {
+  cleanupProxyJobs()
+  cleanupExpiredTempImages({ force: true })
+}, tempImageCleanupIntervalMs)
 tempImageCleanupTimer.unref?.()
 
 server.listen(port, host, () => {
