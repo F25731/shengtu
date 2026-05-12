@@ -21,7 +21,8 @@ function ButtonTooltip({ visible, text }: { visible: boolean; text: ReactNode })
 }
 
 /** API 支持的最大参考图数量 */
-const API_MAX_IMAGES = 16
+const DEFAULT_MAX_INPUT_IMAGES = 16
+const DEFAULT_MAX_INPUT_IMAGE_MB = 10
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(window.innerWidth < 640)
@@ -171,6 +172,7 @@ export default function InputBar() {
   const prevHeightRef = useRef(42)
 
   const [isDragging, setIsDragging] = useState(false)
+  const [isAddingImages, setIsAddingImages] = useState(false)
   const [submitHover, setSubmitHover] = useState(false)
   const [attachHover, setAttachHover] = useState(false)
   const [compressionHintVisible, setCompressionHintVisible] = useState(false)
@@ -245,6 +247,9 @@ export default function InputBar() {
   const moderationDisabled = activeProfile.apiMode === 'responses' || isFalProvider
   const compressionDisabled = params.output_format === 'png' || isFalProvider
   const outputImageLimit = getOutputImageLimitForSettings(effectiveSettings)
+  const maxInputImages = Math.min(50, Math.max(1, Math.floor(Number(settings.maxInputImages || DEFAULT_MAX_INPUT_IMAGES))))
+  const maxInputImageMb = Math.min(50, Math.max(1, Number(settings.maxInputImageMb || DEFAULT_MAX_INPUT_IMAGE_MB)))
+  const maxInputImageBytes = maxInputImageMb * 1024 * 1024
   const isFalTextToImage = isFalProvider && inputImages.length === 0
   const nLimitHintText = isFalProvider
     ? `fal.ai 最大请求数量为 ${outputImageLimit}`
@@ -252,7 +257,7 @@ export default function InputBar() {
   const displaySize = isFalTextToImage && params.size === 'auto'
     ? DEFAULT_FAL_IMAGE_SIZE
     : normalizeImageSize(params.size) || DEFAULT_PARAMS.size
-  const atImageLimit = inputImages.length >= API_MAX_IMAGES
+  const atImageLimit = inputImages.length >= maxInputImages
   const maskTargetImage = maskDraft
     ? inputImages.find((img) => img.id === maskDraft.targetImageId) ?? null
     : null
@@ -477,28 +482,42 @@ export default function InputBar() {
   }
 
   const handleFiles = async (files: FileList | File[]) => {
+    if (isAddingImages) return
+    setIsAddingImages(true)
     try {
       const currentCount = useStore.getState().inputImages.length
-      if (currentCount >= API_MAX_IMAGES) {
+      if (currentCount >= maxInputImages) {
         useStore.getState().showToast(
-          `参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`,
+          `参考图数量已达上限（${maxInputImages} 张），无法继续添加`,
           'error',
         )
         return
       }
 
-      const remaining = API_MAX_IMAGES - currentCount
-      const accepted = Array.from(files).filter((f) => f.type.startsWith('image/'))
+      const remaining = maxInputImages - currentCount
+      const allFiles = Array.from(files)
+      const imageFiles = allFiles.filter((f) => f.type.startsWith('image/'))
+      const oversized = imageFiles.filter((f) => f.size > maxInputImageBytes)
+      const accepted = imageFiles.filter((f) => f.size <= maxInputImageBytes)
       const toAdd = accepted.slice(0, remaining)
       const discarded = accepted.length - toAdd.length
+      const invalid = allFiles.length - imageFiles.length
 
       for (const file of toAdd) {
         await addImageFromFile(file)
       }
 
+      if (invalid > 0) {
+        useStore.getState().showToast(`${invalid} 个文件不是图片，已跳过`, 'error')
+      }
+
+      if (oversized.length > 0) {
+        useStore.getState().showToast(`${oversized.length} 张图片超过 ${maxInputImageMb}MB，已跳过`, 'error')
+      }
+
       if (discarded > 0) {
         useStore.getState().showToast(
-          `已达上限 ${API_MAX_IMAGES} 张，${discarded} 张图片被丢弃`,
+          `已达上限 ${maxInputImages} 张，${discarded} 张图片被丢弃`,
           'error',
         )
       }
@@ -507,6 +526,8 @@ export default function InputBar() {
         `图片添加失败：${err instanceof Error ? err.message : String(err)}`,
         'error',
       )
+    } finally {
+      setIsAddingImages(false)
     }
   }
 
@@ -1146,7 +1167,7 @@ export default function InputBar() {
             <div className="text-center">
               {atImageLimit ? (
                 <>
-                  <p className="text-lg font-semibold text-red-500">已达上限 {API_MAX_IMAGES} 张</p>
+                  <p className="text-lg font-semibold text-red-500">已达上限 {maxInputImages} 张</p>
                   <p className="text-sm text-gray-400 mt-1">请先移除部分参考图后再添加</p>
                 </>
               ) : (
@@ -1292,19 +1313,26 @@ export default function InputBar() {
                   onMouseEnter={() => setAttachHover(true)}
                   onMouseLeave={() => setAttachHover(false)}
                 >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                  <ButtonTooltip visible={(atImageLimit || isAddingImages) && attachHover} text={isAddingImages ? '正在添加参考图...' : `参考图数量已达上限（${maxInputImages} 张），无法继续添加`} />
                   <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                    onClick={() => !atImageLimit && !isAddingImages && fileInputRef.current?.click()}
                     className={`p-2.5 rounded-xl transition-all shadow-sm ${
-                      atImageLimit
+                      atImageLimit || isAddingImages
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300 hover:shadow'
                     }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    title={isAddingImages ? '正在添加参考图' : atImageLimit ? `已达上限 ${maxInputImages} 张` : '添加参考图'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
+                    {isAddingImages ? (
+                      <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    )}
                   </button>
                 </div>
                 <div
@@ -1346,19 +1374,26 @@ export default function InputBar() {
                   onMouseEnter={() => setAttachHover(true)}
                   onMouseLeave={() => setAttachHover(false)}
                 >
-                  <ButtonTooltip visible={atImageLimit && attachHover} text={`参考图数量已达上限（${API_MAX_IMAGES} 张），无法继续添加`} />
+                  <ButtonTooltip visible={(atImageLimit || isAddingImages) && attachHover} text={isAddingImages ? '正在添加参考图...' : `参考图数量已达上限（${maxInputImages} 张），无法继续添加`} />
                   <button
-                    onClick={() => !atImageLimit && fileInputRef.current?.click()}
+                    onClick={() => !atImageLimit && !isAddingImages && fileInputRef.current?.click()}
                     className={`p-2.5 rounded-xl transition-all shadow-sm flex-shrink-0 ${
-                      atImageLimit
+                      atImageLimit || isAddingImages
                         ? 'bg-gray-200 dark:bg-white/[0.04] text-gray-300 dark:text-gray-500 cursor-not-allowed'
                         : 'bg-gray-200 dark:bg-white/[0.06] hover:bg-gray-300 dark:hover:bg-white/[0.1] text-gray-500 dark:text-gray-300'
                     }`}
-                    title={atImageLimit ? `已达上限 ${API_MAX_IMAGES} 张` : '添加参考图'}
+                    title={isAddingImages ? '正在添加参考图' : atImageLimit ? `已达上限 ${maxInputImages} 张` : '添加参考图'}
                   >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
-                    </svg>
+                    {isAddingImages ? (
+                      <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13" />
+                      </svg>
+                    )}
                   </button>
                 </div>
                 <div

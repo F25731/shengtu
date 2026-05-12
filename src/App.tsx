@@ -23,6 +23,8 @@ function areClientConfigsEqual(a: ClientConfig, b: ClientConfig) {
   return (
     a.purchaseUrl === b.purchaseUrl &&
     a.costPerGeneration === b.costPerGeneration &&
+    a.maxInputImages === b.maxInputImages &&
+    a.maxInputImageMb === b.maxInputImageMb &&
     a.announcementText === b.announcementText &&
     a.gateNoticeText === b.gateNoticeText
   )
@@ -60,7 +62,7 @@ export default function App() {
   const [cardReady, setCardReady] = useState(false)
   const [showAddCard, setShowAddCard] = useState(false)
   const [balance, setBalance] = useState<CardBalance>(() => readCachedCardBalance() ?? { cards: [], totalRemaining: 0 })
-  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '', gateNoticeText: '' })
+  const [clientConfig, setClientConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, maxInputImages: 16, maxInputImageMb: 10, announcementText: '', gateNoticeText: '' })
   const refreshInFlightRef = useRef(false)
 
   const refreshBalance = useCallback(async () => {
@@ -79,6 +81,13 @@ export default function App() {
       refreshInFlightRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    setSettings({
+      maxInputImages: clientConfig.maxInputImages,
+      maxInputImageMb: clientConfig.maxInputImageMb,
+    })
+  }, [clientConfig.maxInputImageMb, clientConfig.maxInputImages, setSettings])
 
   useEffect(() => {
     window.__YUNYI_REFRESH_BALANCE__ = () => {

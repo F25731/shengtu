@@ -22,6 +22,8 @@ const proxyJobs = new Map()
 const proxyJobTtlMs = 6 * 60 * 60 * 1000
 const ai6800PollIntervalMs = 5 * 1000
 const ai6800MaxPollMs = 30 * 60 * 1000
+const defaultInputImageLimit = 16
+const defaultInputImageMb = 10
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
 const defaultGateNoticeText = '云逸生图支持 ChatGPT、Gemini 与 Grok 生图，可上传参考图继续修改，并保留历史记录用于预览和下载。请输入卡密开始使用。'
 
@@ -118,6 +120,8 @@ function initDatabase() {
     grok_model: process.env.YUNYI_GROK_MODEL || 'grok-4.2-image',
     cost_per_generation: process.env.YUNYI_COST_PER_GENERATION || '1',
     max_concurrent_generations: process.env.YUNYI_MAX_CONCURRENT_GENERATIONS || '20',
+    max_input_images: process.env.YUNYI_MAX_INPUT_IMAGES || String(defaultInputImageLimit),
+    max_input_image_mb: process.env.YUNYI_MAX_INPUT_IMAGE_MB || String(defaultInputImageMb),
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
     gate_notice_text: process.env.YUNYI_GATE_NOTICE_TEXT || defaultGateNoticeText,
     blocked_words: process.env.YUNYI_BLOCKED_WORDS || '',
@@ -141,7 +145,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words', 'model_routes']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'max_input_images', 'max_input_image_mb', 'announcement_text', 'gate_notice_text', 'blocked_words', 'model_routes']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       const value = key === 'model_routes' && typeof input[key] !== 'string'
@@ -155,6 +159,24 @@ function setSettings(input) {
 const routeKinds = ['chatgpt', 'gemini', 'grok']
 const routeProtocols = new Set(['openai-images', 'openai-chat', 'gemini-generate-content', 'ai6800-media'])
 const uploadModes = new Set(['base64', 'url'])
+
+function normalizePositiveInt(value, fallback, min = 1, max = 1000) {
+  const n = Math.floor(Number(value))
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function normalizePositiveNumber(value, fallback, min = 1, max = 1000) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+function getDefaultRouteMaxImages(kind) {
+  if (kind === 'grok') return 1
+  if (kind === 'gemini') return 14
+  return 10
+}
 
 function normalizeRouteProtocol(value, fallback = 'openai-images') {
   const normalized = String(value || '').trim()
@@ -190,22 +212,22 @@ function buildLegacyModelRoutes(settings = {}) {
     chatgpt: {
       defaultRouteId: chatgptProvider === 'ai6800' ? 'chatgpt-ai6800' : 'chatgpt-backgrace',
       routes: [
-        { id: 'chatgpt-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: imageModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
-        { id: 'chatgpt-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: imageModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
+        { id: 'chatgpt-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: imageModel, apiKey: backgraceApiKey, uploadMode: 'base64', maxImages: getDefaultRouteMaxImages('chatgpt') },
+        { id: 'chatgpt-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: imageModel, apiKey: ai6800ApiKey, uploadMode: 'url', maxImages: getDefaultRouteMaxImages('chatgpt') },
       ],
     },
     gemini: {
       defaultRouteId: geminiProvider === 'ai6800' ? 'gemini-ai6800' : 'gemini-backgrace',
       routes: [
-        { id: 'gemini-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-chat', endpoint: backgraceApiUrl, model: geminiModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
-        { id: 'gemini-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: geminiModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
+        { id: 'gemini-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-chat', endpoint: backgraceApiUrl, model: geminiModel, apiKey: backgraceApiKey, uploadMode: 'base64', maxImages: getDefaultRouteMaxImages('gemini') },
+        { id: 'gemini-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: geminiModel, apiKey: ai6800ApiKey, uploadMode: 'url', maxImages: getDefaultRouteMaxImages('gemini') },
       ],
     },
     grok: {
       defaultRouteId: grokProvider === 'backgrace' ? 'grok-backgrace' : 'grok-ai6800',
       routes: [
-        { id: 'grok-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: grokModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
-        { id: 'grok-backgrace', enabled: false, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: grokModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
+        { id: 'grok-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: grokModel, apiKey: ai6800ApiKey, uploadMode: 'url', maxImages: getDefaultRouteMaxImages('grok') },
+        { id: 'grok-backgrace', enabled: false, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: grokModel, apiKey: backgraceApiKey, uploadMode: 'base64', maxImages: getDefaultRouteMaxImages('grok') },
       ],
     },
   }
@@ -243,6 +265,7 @@ function normalizeModelRoutesConfig(input, legacySettings = {}) {
         model: String(route?.model || '').trim(),
         apiKey: String(route?.apiKey || ''),
         uploadMode: normalizeUploadMode(route?.uploadMode, fallback[kind].routes[index]?.uploadMode || 'base64'),
+        maxImages: normalizePositiveInt(route?.maxImages, fallback[kind].routes[index]?.maxImages || getDefaultRouteMaxImages(kind), 1, 50),
       }
     })
     if (!routes.length) routes.push(...fallback[kind].routes.slice(0, 1))
@@ -957,12 +980,13 @@ function buildGeminiGenerateContentBody(contentType, body, prompt, route, public
   const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
   const jsonData = readJsonRequestData(contentType, body)
   const params = getRequestParams(contentType, body)
+  const maxImages = normalizePositiveInt(route?.maxImages, getDefaultRouteMaxImages('gemini'), 1, 50)
   const images = prepareImageStringsForUploadMode([
     ...collectImageStrings(jsonData.images),
     ...collectImageStrings(jsonData.input),
     ...collectImageStrings(jsonData.messages),
     ...multipart.images,
-  ].slice(0, 14), route, publicBaseUrl, tempFiles)
+  ].slice(0, maxImages), route, publicBaseUrl, tempFiles)
   const parts = [{ text: prompt }, ...images.map(imageStringToGeminiPart).filter(Boolean)]
   const size = String(params.size || 'auto')
   return Buffer.from(JSON.stringify({
@@ -1535,12 +1559,13 @@ function buildAi6800SubmitPayload({ route, contentType, body, prompt, publicBase
   const params = getRequestParams(contentType, body)
   const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
   const jsonData = readJsonRequestData(contentType, body)
+  const maxImages = normalizePositiveInt(route?.maxImages, getDefaultRouteMaxImages(route.kind), 1, 50)
   const images = prepareImageStringsForUploadMode([
     ...collectImageStrings(jsonData.images),
     ...collectImageStrings(jsonData.input),
     ...collectImageStrings(jsonData.messages),
     ...multipart.images,
-  ].slice(0, route.kind === 'grok' ? 1 : route.kind === 'gemini' ? 14 : 10), route, publicBaseUrl, tempFiles)
+  ].slice(0, maxImages), route, publicBaseUrl, tempFiles)
   const size = String(params.size || 'auto')
   const quality = String(params.quality || 'auto')
 
@@ -1765,6 +1790,8 @@ async function handleApi(req, res, pathname) {
     sendJson(res, 200, {
       purchaseUrl: settings.purchase_url || '',
       costPerGeneration: Number(settings.cost_per_generation || 1),
+      maxInputImages: normalizePositiveInt(settings.max_input_images, defaultInputImageLimit, 1, 50),
+      maxInputImageMb: normalizePositiveNumber(settings.max_input_image_mb, defaultInputImageMb, 1, 50),
       announcementText: settings.announcement_text || defaultAnnouncementText,
       gateNoticeText: settings.gate_notice_text || defaultGateNoticeText,
     })

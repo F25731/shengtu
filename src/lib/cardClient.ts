@@ -24,8 +24,19 @@ export interface CardBalance {
 export interface ClientConfig {
   purchaseUrl: string
   costPerGeneration: number
+  maxInputImages: number
+  maxInputImageMb: number
   announcementText: string
   gateNoticeText: string
+}
+
+const DEFAULT_CLIENT_CONFIG: ClientConfig = {
+  purchaseUrl: '',
+  costPerGeneration: 1,
+  maxInputImages: 16,
+  maxInputImageMb: 10,
+  announcementText: '',
+  gateNoticeText: '',
 }
 
 function normalizeCardCode(input: string): string {
@@ -74,11 +85,13 @@ export function hasStoredCards() {
 
 export async function readClientConfig(): Promise<ClientConfig> {
   const response = await fetch('/api/config', { cache: 'no-store' })
-  if (!response.ok) return { purchaseUrl: '', costPerGeneration: 1, announcementText: '', gateNoticeText: '' }
+  if (!response.ok) return DEFAULT_CLIENT_CONFIG
   const data = await response.json()
   return {
     purchaseUrl: String(data.purchaseUrl || ''),
     costPerGeneration: Number(data.costPerGeneration || 1),
+    maxInputImages: Math.min(50, Math.max(1, Math.floor(Number(data.maxInputImages || DEFAULT_CLIENT_CONFIG.maxInputImages)))),
+    maxInputImageMb: Math.min(50, Math.max(1, Number(data.maxInputImageMb || DEFAULT_CLIENT_CONFIG.maxInputImageMb))),
     announcementText: String(data.announcementText || ''),
     gateNoticeText: String(data.gateNoticeText || ''),
   }

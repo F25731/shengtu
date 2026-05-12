@@ -6,7 +6,7 @@ interface Props {
 }
 
 export default function CardGate({ onReady }: Props) {
-  const [config, setConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, announcementText: '', gateNoticeText: '' })
+  const [config, setConfig] = useState<ClientConfig>({ purchaseUrl: '', costPerGeneration: 1, maxInputImages: 16, maxInputImageMb: 10, announcementText: '', gateNoticeText: '' })
   const [code, setCode] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)

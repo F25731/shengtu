@@ -82,6 +82,8 @@ export interface AppSettings {
   providerOrder?: string[]
   clearInputAfterSubmit: boolean
   persistInputOnRestart: boolean
+  maxInputImages: number
+  maxInputImageMb: number
   reuseTaskApiProfileTemporarily: boolean
   alwaysShowRetryButton: boolean
   profiles: ApiProfile[]

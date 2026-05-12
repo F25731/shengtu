@@ -17,6 +17,8 @@ import { readRuntimeEnv } from './runtimeEnv'
 const DEFAULT_BASE_URL = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_URL) || ''
 const DEFAULT_API_KEY = readRuntimeEnv(import.meta.env.VITE_DEFAULT_API_KEY) || 'yunyi-server'
 const DEFAULT_OPENAI_API_PROXY = true
+export const DEFAULT_MAX_INPUT_IMAGES = 16
+export const DEFAULT_MAX_INPUT_IMAGE_MB = 10
 export const DEFAULT_IMAGES_MODEL = 'gpt-image-2'
 export const DEFAULT_GEMINI_MODEL = 'gemini-3-pro-image-preview'
 export const DEFAULT_GROK_MODEL = 'grok-4.2-image'
@@ -275,6 +277,12 @@ export function createDefaultOpenAIProfile(overrides: Partial<ApiProfile> = {}):
   }
 }
 
+function normalizePositiveNumber(value: unknown, fallback: number, min: number, max: number): number {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
 export function createDefaultFalProfile(overrides: Partial<ApiProfile> = {}): ApiProfile {
   return {
     id: `fal-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -464,6 +472,8 @@ export function normalizeSettings(input: Partial<AppSettings> | unknown): AppSet
     providerOrder: Array.isArray(record.providerOrder) ? record.providerOrder.map(String) : undefined,
     clearInputAfterSubmit: typeof record.clearInputAfterSubmit === 'boolean' ? record.clearInputAfterSubmit : false,
     persistInputOnRestart: typeof record.persistInputOnRestart === 'boolean' ? record.persistInputOnRestart : true,
+    maxInputImages: Math.floor(normalizePositiveNumber(record.maxInputImages, DEFAULT_MAX_INPUT_IMAGES, 1, 50)),
+    maxInputImageMb: normalizePositiveNumber(record.maxInputImageMb, DEFAULT_MAX_INPUT_IMAGE_MB, 1, 50),
     reuseTaskApiProfileTemporarily: typeof record.reuseTaskApiProfileTemporarily === 'boolean' ? record.reuseTaskApiProfileTemporarily : false,
     alwaysShowRetryButton: typeof record.alwaysShowRetryButton === 'boolean' ? record.alwaysShowRetryButton : false,
     profiles,
@@ -744,6 +754,8 @@ export const DEFAULT_SETTINGS: AppSettings = normalizeSettings({
   customProviders: [],
   clearInputAfterSubmit: false,
   persistInputOnRestart: true,
+  maxInputImages: DEFAULT_MAX_INPUT_IMAGES,
+  maxInputImageMb: DEFAULT_MAX_INPUT_IMAGE_MB,
   reuseTaskApiProfileTemporarily: false,
   alwaysShowRetryButton: false,
 })
