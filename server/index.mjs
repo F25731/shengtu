@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
@@ -20,6 +20,10 @@ const adminToken = createHash('sha256').update(`yunyi-admin:${adminPassword}`).d
 const cardAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'
 const proxyJobs = new Map()
 const proxyJobTtlMs = 6 * 60 * 60 * 1000
+const configuredTempImageTtlMs = Number(process.env.YUNYI_TEMP_IMAGE_TTL_MS || proxyJobTtlMs)
+const configuredTempImageCleanupIntervalMs = Number(process.env.YUNYI_TEMP_IMAGE_CLEANUP_INTERVAL_MS || 10 * 60 * 1000)
+const tempImageTtlMs = Number.isFinite(configuredTempImageTtlMs) && configuredTempImageTtlMs > 0 ? configuredTempImageTtlMs : proxyJobTtlMs
+const tempImageCleanupIntervalMs = Number.isFinite(configuredTempImageCleanupIntervalMs) && configuredTempImageCleanupIntervalMs > 0 ? configuredTempImageCleanupIntervalMs : 10 * 60 * 1000
 const ai6800PollIntervalMs = 5 * 1000
 const ai6800MaxPollMs = 30 * 60 * 1000
 const defaultInputImageLimit = 16
@@ -42,6 +46,7 @@ const mimeTypes = {
 
 mkdirSync(dataDir, { recursive: true })
 mkdirSync(tempImageDir, { recursive: true })
+cleanupExpiredTempImages()
 
 const SQL = await initSqlJs({
   locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm'),
@@ -549,6 +554,29 @@ function cleanupTempFiles(files = []) {
   files.length = 0
 }
 
+function cleanupExpiredTempImages() {
+  const now = Date.now()
+  const activePaths = new Set()
+  for (const job of proxyJobs.values()) {
+    for (const file of job.tempFiles || []) {
+      const filePath = normalize(String(file?.path || ''))
+      if (filePath.startsWith(tempImageDir)) activePaths.add(filePath)
+    }
+  }
+  for (const entry of readdirSync(tempImageDir, { withFileTypes: true })) {
+    if (!entry.isFile()) continue
+    if (!/^[a-f0-9-]+\.(?:png|jpe?g|webp|gif)$/i.test(entry.name)) continue
+    const filePath = normalize(join(tempImageDir, entry.name))
+    if (!filePath.startsWith(tempImageDir) || activePaths.has(filePath)) continue
+    try {
+      const stat = statSync(filePath)
+      if (now - stat.mtimeMs >= tempImageTtlMs) unlinkSync(filePath)
+    } catch (err) {
+      console.warn('Failed to clean expired temp image:', err instanceof Error ? err.message : String(err))
+    }
+  }
+}
+
 function cleanupProxyJobs() {
   const now = Date.now()
   for (const [id, job] of proxyJobs.entries()) {
@@ -557,6 +585,7 @@ function cleanupProxyJobs() {
       proxyJobs.delete(id)
     }
   }
+  cleanupExpiredTempImages()
 }
 
 function createProxyJob(initial) {
@@ -1987,6 +2016,9 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 500, { error: message })
   }
 })
+
+const tempImageCleanupTimer = setInterval(() => cleanupProxyJobs(), tempImageCleanupIntervalMs)
+tempImageCleanupTimer.unref?.()
 
 server.listen(port, host, () => {
   console.log(`云逸生图服务已启动：http://${host}:${port}`)
