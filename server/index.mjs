@@ -1,5 +1,5 @@
 import http from 'node:http'
-import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, extname, join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createHash, randomInt, randomUUID } from 'node:crypto'
@@ -10,6 +10,8 @@ const require = createRequire(import.meta.url)
 const appRoot = normalize(join(fileURLToPath(new URL('..', import.meta.url))))
 const distRoot = join(appRoot, 'dist')
 const dataDir = process.env.YUNYI_DATA_DIR || join(appRoot, 'server', 'data')
+const tempImageDir = process.env.YUNYI_TEMP_IMAGE_DIR || join(dataDir, 'temp-images')
+const publicBaseUrlOverride = String(process.env.YUNYI_PUBLIC_BASE_URL || '').replace(/\/+$/, '')
 const dbPath = process.env.YUNYI_DB_PATH || join(dataDir, 'yunyi.sqlite')
 const host = process.env.HOST || '0.0.0.0'
 const port = Number(process.env.PORT || 3000)
@@ -37,6 +39,7 @@ const mimeTypes = {
 }
 
 mkdirSync(dataDir, { recursive: true })
+mkdirSync(tempImageDir, { recursive: true })
 
 const SQL = await initSqlJs({
   locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm'),
@@ -470,10 +473,66 @@ function sendJson(res, status, payload) {
   res.end(body)
 }
 
+function getImageExtFromMime(mime) {
+  const normalized = String(mime || '').split(';')[0].trim().toLowerCase()
+  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return '.jpg'
+  if (normalized === 'image/webp') return '.webp'
+  if (normalized === 'image/gif') return '.gif'
+  if (normalized === 'image/png') return '.png'
+  return '.png'
+}
+
+function getPublicBaseUrl(req) {
+  if (publicBaseUrlOverride) return publicBaseUrlOverride
+  const forwardedProto = String(req.headers['x-forwarded-proto'] || '').split(',')[0].trim()
+  const forwardedHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim()
+  const proto = forwardedProto || (req.socket.encrypted ? 'https' : 'http')
+  const requestHost = forwardedHost || String(req.headers.host || `${host}:${port}`)
+  return `${proto}://${requestHost}`.replace(/\/+$/, '')
+}
+
+function persistTempImageFromDataUrl(dataUrl, publicBaseUrl, tempFiles = []) {
+  const image = dataUrlToImagePayload(dataUrl)
+  if (!image) return ''
+  const ext = getImageExtFromMime(image.mime)
+  const filename = `${randomUUID()}${ext}`
+  const filePath = normalize(join(tempImageDir, filename))
+  if (!filePath.startsWith(tempImageDir)) throw new Error('Invalid temp image path')
+  writeFileSync(filePath, Buffer.from(image.b64Json, 'base64'))
+  const url = `${publicBaseUrl}/api/temp-images/${filename}`
+  tempFiles.push({ path: filePath, url })
+  return url
+}
+
+function prepareImageStringsForUploadMode(images, route, publicBaseUrl, tempFiles = []) {
+  if (route?.uploadMode !== 'url') return images
+  return images.map((image) => {
+    const text = String(image || '').trim()
+    if (/^https?:\/\//i.test(text)) return text
+    if (/^data:image\//i.test(text)) return persistTempImageFromDataUrl(text, publicBaseUrl, tempFiles)
+    return text
+  }).filter(Boolean)
+}
+
+function cleanupTempFiles(files = []) {
+  for (const file of files) {
+    try {
+      const filePath = normalize(String(file?.path || ''))
+      if (filePath && filePath.startsWith(tempImageDir) && existsSync(filePath)) unlinkSync(filePath)
+    } catch (err) {
+      console.warn('Failed to clean temp image:', err instanceof Error ? err.message : String(err))
+    }
+  }
+  files.length = 0
+}
+
 function cleanupProxyJobs() {
   const now = Date.now()
   for (const [id, job] of proxyJobs.entries()) {
-    if (job.expiresAt <= now) proxyJobs.delete(id)
+    if (job.expiresAt <= now) {
+      cleanupTempFiles(job.tempFiles || [])
+      proxyJobs.delete(id)
+    }
   }
 }
 
@@ -491,6 +550,7 @@ function createProxyJob(initial) {
     body: undefined,
     bodyText: '',
     errorMessage: '',
+    tempFiles: [],
     ...initial,
   }
   proxyJobs.set(job.id, job)
@@ -893,16 +953,16 @@ function imageStringToGeminiPart(value) {
   return null
 }
 
-function buildGeminiGenerateContentBody(contentType, body, prompt) {
+function buildGeminiGenerateContentBody(contentType, body, prompt, route, publicBaseUrl, tempFiles) {
   const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
   const jsonData = readJsonRequestData(contentType, body)
   const params = getRequestParams(contentType, body)
-  const images = [
+  const images = prepareImageStringsForUploadMode([
     ...collectImageStrings(jsonData.images),
     ...collectImageStrings(jsonData.input),
     ...collectImageStrings(jsonData.messages),
     ...multipart.images,
-  ].slice(0, 14)
+  ].slice(0, 14), route, publicBaseUrl, tempFiles)
   const parts = [{ text: prompt }, ...images.map(imageStringToGeminiPart).filter(Boolean)]
   const size = String(params.size || 'auto')
   return Buffer.from(JSON.stringify({
@@ -952,15 +1012,35 @@ function normalizeGeminiGenerateContentParsed(parsed) {
   }
 }
 
-function buildProxyBody(contentType, body, settings, apiPath, routeOrKind = '') {
+function rewriteDataUrlsForUploadMode(value, route, publicBaseUrl, tempFiles) {
+  if (route?.uploadMode !== 'url') return value
+  if (typeof value === 'string') {
+    const text = value.trim()
+    if (/^data:image\//i.test(text)) return persistTempImageFromDataUrl(text, publicBaseUrl, tempFiles)
+    return value
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => rewriteDataUrlsForUploadMode(item, route, publicBaseUrl, tempFiles))
+  }
+  if (value && typeof value === 'object') {
+    const next = {}
+    for (const [key, item] of Object.entries(value)) {
+      next[key] = rewriteDataUrlsForUploadMode(item, route, publicBaseUrl, tempFiles)
+    }
+    return next
+  }
+  return value
+}
+
+function buildProxyBody(contentType, body, settings, apiPath, routeOrKind = '', publicBaseUrl = '', tempFiles = []) {
   const route = typeof routeOrKind === 'object' && routeOrKind ? routeOrKind : null
   const modelKind = route?.kind || routeOrKind || ''
   const model = route?.model || getModelForKind(settings, modelKind)
   const prompt = extractPrompt(contentType, body)
-  if (route?.protocol === 'gemini-generate-content') return buildGeminiGenerateContentBody(contentType, body, prompt)
+  if (route?.protocol === 'gemini-generate-content') return buildGeminiGenerateContentBody(contentType, body, prompt, route, publicBaseUrl, tempFiles)
   if (!contentType.includes('application/json')) return body
   try {
-    const data = parseJsonBody(body)
+    const data = rewriteDataUrlsForUploadMode(parseJsonBody(body), route, publicBaseUrl, tempFiles)
     const path = `/${String(apiPath || '').replace(/^\/+/, '')}`
     if (path.includes('/chat/completions') || route?.protocol === 'openai-chat') {
       if (model) data.model = model
@@ -1005,6 +1085,32 @@ function serveStatic(req, res, pathname) {
     Expires: '0',
   })
   createReadStream(target).on('error', () => sendText(res, 404, 'Not found')).pipe(res)
+}
+
+function serveTempImage(req, res, pathname) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    sendJson(res, 405, { error: 'Method not allowed' })
+    return
+  }
+  const match = pathname.match(/^\/api\/temp-images\/([a-f0-9-]+\.(?:png|jpe?g|webp|gif))$/i)
+  if (!match) {
+    sendJson(res, 404, { error: 'Not found' })
+    return
+  }
+  const filePath = normalize(join(tempImageDir, match[1]))
+  if (!filePath.startsWith(tempImageDir) || !existsSync(filePath) || !statSync(filePath).isFile()) {
+    sendJson(res, 404, { error: 'Not found' })
+    return
+  }
+  res.writeHead(200, {
+    'Content-Type': mimeTypes[extname(filePath).toLowerCase()] || 'application/octet-stream',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate',
+  })
+  if (req.method === 'HEAD') {
+    res.end()
+    return
+  }
+  createReadStream(filePath).pipe(res)
 }
 
 async function handleImageProxy(req, res, pathname) {
@@ -1224,6 +1330,7 @@ async function handleImageProxyTaskMode(req, res, pathname) {
 
   const logId = insertUsageLog({ cardCode: chargedCard, prompt, cost, status: 'pending' })
   const job = createProxyJob({ logId, chargedCard, codes, cost, prompt })
+  const publicBaseUrl = getPublicBaseUrl(req)
 
   sendJson(res, 202, {
     ok: true,
@@ -1241,19 +1348,20 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     pathname,
     contentType,
     body,
+    publicBaseUrl,
   }).catch((err) => {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`YunYi proxy job ${job.id} failed unexpectedly:`, message)
   })
 }
 
-async function runImageProxyJob(job, { reqAccept, settings, route, pathname, contentType, body }) {
+async function runImageProxyJob(job, { reqAccept, settings, route, pathname, contentType, body, publicBaseUrl }) {
   const { chargedCard, codes, cost, logId } = job
 
   try {
     touchProxyJob(job, { status: 'running' })
     const targetUrl = buildOpenAiProxyTargetUrl(route, pathname)
-    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route)
+    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route, publicBaseUrl, job.tempFiles)
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
@@ -1307,6 +1415,8 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
       errorMessage: message,
       balance: getCardsBalance(codes),
     })
+  } finally {
+    cleanupTempFiles(job.tempFiles || [])
   }
 }
 
@@ -1421,16 +1531,16 @@ function getGrokSize(size) {
   return '1024x1024'
 }
 
-function buildAi6800SubmitPayload({ route, contentType, body, prompt }) {
+function buildAi6800SubmitPayload({ route, contentType, body, prompt, publicBaseUrl, tempFiles }) {
   const params = getRequestParams(contentType, body)
   const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
   const jsonData = readJsonRequestData(contentType, body)
-  const images = [
+  const images = prepareImageStringsForUploadMode([
     ...collectImageStrings(jsonData.images),
     ...collectImageStrings(jsonData.input),
     ...collectImageStrings(jsonData.messages),
     ...multipart.images,
-  ].slice(0, route.kind === 'grok' ? 1 : route.kind === 'gemini' ? 14 : 10)
+  ].slice(0, route.kind === 'grok' ? 1 : route.kind === 'gemini' ? 14 : 10), route, publicBaseUrl, tempFiles)
   const size = String(params.size || 'auto')
   const quality = String(params.quality || 'auto')
 
@@ -1550,11 +1660,11 @@ function buildAi6800SuccessBody(route, imagePayloads, resultUrls) {
   }
 }
 
-async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, body }) {
+async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, body, publicBaseUrl }) {
   const { chargedCard, codes, cost, logId, prompt } = job
   try {
     touchProxyJob(job, { status: 'running' })
-    const submitPayload = buildAi6800SubmitPayload({ route, contentType, body, prompt })
+    const submitPayload = buildAi6800SubmitPayload({ route, contentType, body, prompt, publicBaseUrl, tempFiles: job.tempFiles })
     const submit = await fetchAi6800Json(`${route.apiUrl}/v1/media/generate`, route, {
       method: 'POST',
       body: JSON.stringify(submitPayload),
@@ -1597,6 +1707,8 @@ async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, 
       errorMessage: message,
       balance: getCardsBalance(codes),
     })
+  } finally {
+    cleanupTempFiles(job.tempFiles || [])
   }
 }
 
@@ -1819,6 +1931,10 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') {
       res.writeHead(204)
       res.end()
+      return
+    }
+    if (pathname.startsWith('/api/temp-images/')) {
+      serveTempImage(req, res, pathname)
       return
     }
     const taskMatch = pathname.match(/^\/api-proxy\/tasks\/([^/]+)$/)
