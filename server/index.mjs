@@ -123,6 +123,12 @@ function initDatabase() {
     const existing = selectOne('SELECT key FROM settings WHERE key = ?', [key])
     if (!existing) db.run('INSERT INTO settings (key, value) VALUES (?, ?)', [key, value])
   }
+  const existingModelRoutes = selectOne('SELECT key FROM settings WHERE key = ?', ['model_routes'])
+  if (!existingModelRoutes) {
+    const settings = Object.fromEntries(Object.entries(defaults))
+    for (const row of selectAll('SELECT key, value FROM settings')) settings[row.key] = row.value
+    db.run('INSERT INTO settings (key, value) VALUES (?, ?)', ['model_routes', JSON.stringify(buildLegacyModelRoutes(settings))])
+  }
   saveDb()
 }
 
@@ -132,12 +138,193 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words', 'model_routes']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
-      run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, String(input[key] ?? '')])
+      const value = key === 'model_routes' && typeof input[key] !== 'string'
+        ? JSON.stringify(input[key])
+        : String(input[key] ?? '')
+      run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', [key, value])
     }
   }
+}
+
+const routeKinds = ['chatgpt', 'gemini', 'grok']
+const routeProtocols = new Set(['openai-images', 'openai-chat', 'gemini-generate-content', 'ai6800-media'])
+const uploadModes = new Set(['base64', 'url'])
+
+function normalizeRouteProtocol(value, fallback = 'openai-images') {
+  const normalized = String(value || '').trim()
+  return routeProtocols.has(normalized) ? normalized : fallback
+}
+
+function normalizeUploadMode(value, fallback = 'base64') {
+  const normalized = String(value || '').trim()
+  return uploadModes.has(normalized) ? normalized : fallback
+}
+
+function makeRouteId(kind, name, index) {
+  const base = String(name || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+  return `${kind}-${base || `route-${index + 1}`}`
+}
+
+function buildLegacyModelRoutes(settings = {}) {
+  const backgraceApiUrl = String(settings.backgrace_api_url || process.env.BACKGRACE_API_URL || 'https://backgrace.com/v1').replace(/\/+$/, '')
+  const ai6800ApiUrl = String(settings.ai6800_api_url || process.env.AI6800_API_URL || 'https://api.ai6800.com').replace(/\/+$/, '')
+  const backgraceApiKey = String(settings.backgrace_api_key || process.env.BACKGRACE_API_KEY || '')
+  const ai6800ApiKey = String(settings.ai6800_api_key || process.env.AI6800_API_KEY || '')
+  const chatgptProvider = normalizeProviderId(settings.chatgpt_provider || process.env.YUNYI_CHATGPT_PROVIDER || 'backgrace', 'backgrace')
+  const geminiProvider = normalizeProviderId(settings.gemini_provider || process.env.YUNYI_GEMINI_PROVIDER || 'backgrace', 'backgrace')
+  const grokProvider = normalizeProviderId(settings.grok_provider || process.env.YUNYI_GROK_PROVIDER || 'ai6800', 'ai6800')
+  const imageModel = String(settings.image_model || process.env.YUNYI_IMAGE_MODEL || 'gpt-image-2')
+  const geminiModel = String(settings.gemini_model || process.env.YUNYI_GEMINI_MODEL || 'gemini-3-pro-image-preview')
+  const grokModel = String(settings.grok_model || process.env.YUNYI_GROK_MODEL || 'grok-4.2-image')
+
+  return {
+    chatgpt: {
+      defaultRouteId: chatgptProvider === 'ai6800' ? 'chatgpt-ai6800' : 'chatgpt-backgrace',
+      routes: [
+        { id: 'chatgpt-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: imageModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
+        { id: 'chatgpt-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: imageModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
+      ],
+    },
+    gemini: {
+      defaultRouteId: geminiProvider === 'ai6800' ? 'gemini-ai6800' : 'gemini-backgrace',
+      routes: [
+        { id: 'gemini-backgrace', enabled: true, name: 'BackGrace', protocol: 'openai-chat', endpoint: backgraceApiUrl, model: geminiModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
+        { id: 'gemini-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: geminiModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
+      ],
+    },
+    grok: {
+      defaultRouteId: grokProvider === 'backgrace' ? 'grok-backgrace' : 'grok-ai6800',
+      routes: [
+        { id: 'grok-ai6800', enabled: true, name: 'ai6800', protocol: 'ai6800-media', endpoint: ai6800ApiUrl, model: grokModel, apiKey: ai6800ApiKey, uploadMode: 'url' },
+        { id: 'grok-backgrace', enabled: false, name: 'BackGrace', protocol: 'openai-images', endpoint: backgraceApiUrl, model: grokModel, apiKey: backgraceApiKey, uploadMode: 'base64' },
+      ],
+    },
+  }
+}
+
+function parseModelRoutesConfig(input) {
+  if (!input) return null
+  if (typeof input === 'object') return input
+  try {
+    return JSON.parse(String(input))
+  } catch {
+    return null
+  }
+}
+
+function normalizeModelRoutesConfig(input, legacySettings = {}) {
+  const parsed = parseModelRoutesConfig(input)
+  const fallback = buildLegacyModelRoutes(legacySettings)
+  const output = {}
+  for (const kind of routeKinds) {
+    const source = parsed?.[kind] && typeof parsed[kind] === 'object' ? parsed[kind] : fallback[kind]
+    const rawRoutes = Array.isArray(source.routes) ? source.routes : fallback[kind].routes
+    const seen = new Set()
+    const routes = rawRoutes.slice(0, 5).map((route, index) => {
+      const name = String(route?.name || `线路 ${index + 1}`).trim()
+      let id = String(route?.id || makeRouteId(kind, name, index)).trim()
+      if (!id || seen.has(id)) id = `${makeRouteId(kind, name, index)}-${index + 1}`
+      seen.add(id)
+      return {
+        id,
+        enabled: route?.enabled !== false,
+        name,
+        protocol: normalizeRouteProtocol(route?.protocol, fallback[kind].routes[index]?.protocol || 'openai-images'),
+        endpoint: String(route?.endpoint || '').trim(),
+        model: String(route?.model || '').trim(),
+        apiKey: String(route?.apiKey || ''),
+        uploadMode: normalizeUploadMode(route?.uploadMode, fallback[kind].routes[index]?.uploadMode || 'base64'),
+      }
+    })
+    if (!routes.length) routes.push(...fallback[kind].routes.slice(0, 1))
+    const requestedDefault = String(source.defaultRouteId || '')
+    const defaultRouteId = routes.some((route) => route.id === requestedDefault)
+      ? requestedDefault
+      : (routes.find((route) => route.enabled)?.id || routes[0]?.id || '')
+    output[kind] = { defaultRouteId, routes }
+  }
+  return output
+}
+
+function getModelRoutes(settings = getSettings()) {
+  return normalizeModelRoutesConfig(settings.model_routes, settings)
+}
+
+function maskModelRoutesConfig(config) {
+  const output = {}
+  for (const kind of routeKinds) {
+    output[kind] = {
+      defaultRouteId: config[kind]?.defaultRouteId || '',
+      routes: (config[kind]?.routes || []).map((route) => ({
+        ...route,
+        apiKey: route.apiKey ? '********' : '',
+      })),
+    }
+  }
+  return output
+}
+
+function preserveMaskedModelRouteKeys(inputConfig, currentConfig) {
+  const output = normalizeModelRoutesConfig(inputConfig)
+  for (const kind of routeKinds) {
+    for (const route of output[kind].routes) {
+      if (route.apiKey !== '********') continue
+      const current = currentConfig[kind]?.routes?.find((item) => item.id === route.id)
+      route.apiKey = current?.apiKey || ''
+    }
+  }
+  return output
+}
+
+function getDefaultModelRoute(config, kind) {
+  const group = config?.[kind]
+  if (!group) return null
+  return group.routes.find((route) => route.id === group.defaultRouteId) || group.routes.find((route) => route.enabled) || group.routes[0] || null
+}
+
+function providerFromModelRoute(route) {
+  const endpoint = String(route?.endpoint || '').toLowerCase()
+  if (route?.protocol === 'ai6800-media' || endpoint.includes('ai6800')) return 'ai6800'
+  return 'backgrace'
+}
+
+function deriveLegacySettingsFromModelRoutes(config) {
+  const chatgptRoute = getDefaultModelRoute(config, 'chatgpt')
+  const geminiRoute = getDefaultModelRoute(config, 'gemini')
+  const grokRoute = getDefaultModelRoute(config, 'grok')
+  const defaultRoutes = [chatgptRoute, geminiRoute, grokRoute].filter(Boolean)
+  const backgraceRoute = defaultRoutes.find((route) => providerFromModelRoute(route) === 'backgrace' && route.apiKey)
+    || defaultRoutes.find((route) => providerFromModelRoute(route) === 'backgrace')
+  const ai6800Route = defaultRoutes.find((route) => providerFromModelRoute(route) === 'ai6800' && route.apiKey)
+    || defaultRoutes.find((route) => providerFromModelRoute(route) === 'ai6800')
+  const legacy = {}
+  if (chatgptRoute) {
+    legacy.chatgpt_provider = providerFromModelRoute(chatgptRoute)
+    legacy.image_model = chatgptRoute.model
+  }
+  if (geminiRoute) {
+    legacy.gemini_provider = providerFromModelRoute(geminiRoute)
+    legacy.gemini_model = geminiRoute.model
+  }
+  if (grokRoute) {
+    legacy.grok_provider = providerFromModelRoute(grokRoute)
+    legacy.grok_model = grokRoute.model
+  }
+  if (backgraceRoute) {
+    legacy.backgrace_api_url = backgraceRoute.endpoint
+    legacy.backgrace_api_key = backgraceRoute.apiKey
+  }
+  if (ai6800Route) {
+    legacy.ai6800_api_url = ai6800Route.endpoint
+    legacy.ai6800_api_key = ai6800Route.apiKey
+  }
+  return legacy
 }
 
 function normalizeCardCode(input) {
@@ -1376,10 +1563,12 @@ async function handleAdmin(req, res, pathname, searchParams) {
   if (pathname === '/api/admin/settings') {
     if (req.method === 'GET') {
       const settings = getSettings()
+      const modelRoutes = getModelRoutes(settings)
       sendJson(res, 200, {
         ...settings,
         backgrace_api_key: settings.backgrace_api_key ? '********' : '',
         ai6800_api_key: settings.ai6800_api_key ? '********' : '',
+        model_routes: maskModelRoutesConfig(modelRoutes),
       })
       return
     }
@@ -1388,6 +1577,12 @@ async function handleAdmin(req, res, pathname, searchParams) {
       const current = getSettings()
       if (input.backgrace_api_key === '********') input.backgrace_api_key = current.backgrace_api_key || ''
       if (input.ai6800_api_key === '********') input.ai6800_api_key = current.ai6800_api_key || ''
+      if (input.model_routes) {
+        const currentRoutes = getModelRoutes(current)
+        const modelRoutes = preserveMaskedModelRouteKeys(input.model_routes, currentRoutes)
+        Object.assign(input, deriveLegacySettingsFromModelRoutes(modelRoutes))
+        input.model_routes = modelRoutes
+      }
       setSettings(input)
       sendJson(res, 200, { ok: true })
       return

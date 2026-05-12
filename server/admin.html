@@ -38,6 +38,20 @@
     label { display:flex; flex-direction:column; gap:7px; color:#a8afbd; font-size:13px; }
     .form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
     .form-grid .wide { grid-column:1 / -1; }
+    .settings-stack { display:grid; gap:18px; }
+    .settings-section { border:1px solid #292d38; border-radius:14px; padding:16px; background:#101218; }
+    .settings-section h3 { margin:0; color:#f4f4f5; font-size:16px; }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
+    .route-list { display:grid; gap:12px; margin-top:12px; }
+    .route-card { border:1px solid #2b3140; border-radius:12px; padding:14px; background:#151820; }
+    .route-card-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+    .route-title { display:flex; align-items:center; gap:10px; color:#f4f4f5; font-weight:800; }
+    .route-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .route-endpoint { grid-column:1 / -1; }
+    .checkline { flex-direction:row; align-items:center; gap:8px; color:#e5e7eb; }
+    .checkline input { width:auto; }
+    .default-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; background:rgba(59,130,246,.16); color:#93c5fd; font-size:12px; }
+    .route-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
     .toolbar { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .filters input { width:260px; }
@@ -68,6 +82,8 @@
       .filters input, .filters select { width:100%; }
       table { min-width:760px; }
       .table-wrap { overflow:auto; }
+      .route-grid { grid-template-columns:1fr; }
+      .route-endpoint { grid-column:auto; }
     }
   </style>
 </head>
@@ -168,23 +184,47 @@
       <button class="ghost" onclick="closeSettingsModal()">关闭</button>
     </div>
     <div class="modal-body">
-      <div class="form-grid grid">
-        <label><span>购买卡密链接</span><input id="purchase_url" placeholder="https://..." /></label>
-        <label><span>BackGrace API URL</span><input id="backgrace_api_url" placeholder="https://backgrace.com/v1" /></label>
-        <label><span>BackGrace API Key</span><input id="backgrace_api_key" placeholder="留空不修改" /></label>
-        <label><span>ai6800 API URL</span><input id="ai6800_api_url" placeholder="https://api.ai6800.com" /></label>
-        <label><span>ai6800 API Key</span><input id="ai6800_api_key" placeholder="留空不修改" /></label>
-        <label><span>ChatGPT 线路</span><select id="chatgpt_provider"><option value="backgrace">BackGrace</option><option value="ai6800">ai6800</option></select></label>
-        <label><span>Gemini 线路</span><select id="gemini_provider"><option value="backgrace">BackGrace</option><option value="ai6800">ai6800</option></select></label>
-        <label><span>Grok 线路</span><select id="grok_provider"><option value="ai6800">ai6800</option><option value="backgrace">BackGrace</option></select></label>
-        <label><span>ChatGPT 模型</span><input id="image_model" placeholder="gpt-image-2" /></label>
-        <label><span>Gemini 模型</span><input id="gemini_model" placeholder="gemini-3-pro-image-preview" /></label>
-        <label><span>Grok 模型</span><input id="grok_model" placeholder="grok-4.2-image" /></label>
-        <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
-        <label><span>最大同时生成任务数</span><input id="max_concurrent_generations" type="number" min="0" placeholder="20，0 表示不限制" /></label>
-        <label class="wide"><span>首页公告</span><textarea id="announcement_text" placeholder="公告内容"></textarea></label>
-        <label class="wide"><span>入口页说明</span><textarea id="gate_notice_text" placeholder="客户第一次输入卡密前看到的产品介绍"></textarea></label>
-        <label class="wide"><span>提示词屏蔽词（一行一个）</span><textarea id="blocked_words" placeholder="例如：习近平&#10;政治人物姓名&#10;不想让用户提交的关键词"></textarea></label>
+      <div class="settings-stack">
+        <section class="settings-section">
+          <div class="section-head">
+            <h3>基础设置</h3>
+          </div>
+          <div class="form-grid grid">
+            <label><span>购买卡密链接</span><input id="purchase_url" placeholder="https://..." /></label>
+            <label><span>每张图片消耗次数</span><input id="cost_per_generation" type="number" min="1" /></label>
+            <label><span>最大同时生成任务数</span><input id="max_concurrent_generations" type="number" min="0" placeholder="20，0 表示不限制" /></label>
+            <label class="wide"><span>首页公告</span><textarea id="announcement_text" placeholder="首页公告内容"></textarea></label>
+            <label class="wide"><span>入口页说明</span><textarea id="gate_notice_text" placeholder="客户第一次输入卡密前看到的产品介绍"></textarea></label>
+            <label class="wide"><span>提示词屏蔽词（一行一个）</span><textarea id="blocked_words" placeholder="例如：习近平&#10;政治人物姓名&#10;不想让用户提交的关键词"></textarea></label>
+          </div>
+        </section>
+
+        <section class="settings-section" data-kind="chatgpt">
+          <div class="section-head">
+            <h3>ChatGPT 线路</h3>
+            <button class="secondary small" onclick="addRoute('chatgpt')">新增线路</button>
+          </div>
+          <label><span>默认线路</span><select id="chatgpt_default_route" onchange="setDefaultRoute('chatgpt', this.value)"></select></label>
+          <div id="chatgpt_routes" class="route-list"></div>
+        </section>
+
+        <section class="settings-section" data-kind="gemini">
+          <div class="section-head">
+            <h3>Gemini 线路</h3>
+            <button class="secondary small" onclick="addRoute('gemini')">新增线路</button>
+          </div>
+          <label><span>默认线路</span><select id="gemini_default_route" onchange="setDefaultRoute('gemini', this.value)"></select></label>
+          <div id="gemini_routes" class="route-list"></div>
+        </section>
+
+        <section class="settings-section" data-kind="grok">
+          <div class="section-head">
+            <h3>Grok 线路</h3>
+            <button class="secondary small" onclick="addRoute('grok')">新增线路</button>
+          </div>
+          <label><span>默认线路</span><select id="grok_default_route" onchange="setDefaultRoute('grok', this.value)"></select></label>
+          <div id="grok_routes" class="route-list"></div>
+        </section>
       </div>
       <div class="row" style="margin-top:18px">
         <button onclick="saveSettings()">保存设置</button>
@@ -214,6 +254,23 @@ let cardTotal = 0
 let currentCards = []
 let deletingCardCode = ''
 const cardPageSize = 10
+const basicSettingKeys = ['purchase_url', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']
+const modelKinds = [
+  { id: 'chatgpt', label: 'ChatGPT', defaultModel: 'gpt-image-2' },
+  { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-3-pro-image-preview' },
+  { id: 'grok', label: 'Grok', defaultModel: 'grok-4.2-image' },
+]
+const protocolOptions = [
+  ['openai-images', 'OpenAI Images'],
+  ['openai-chat', 'OpenAI Chat'],
+  ['gemini-generate-content', 'Gemini generateContent'],
+  ['ai6800-media', 'ai6800 Media'],
+]
+const uploadModeOptions = [
+  ['base64', 'base64 上传'],
+  ['url', 'URL 上传'],
+]
+let modelRoutesDraft = createEmptyModelRoutes()
 
 function authHeaders() {
   return token ? { Authorization: `Bearer ${token}` } : {}
@@ -272,18 +329,159 @@ function closeSettingsModal() {
   document.getElementById('settingsModal').classList.add('hidden')
 }
 
+function createEmptyModelRoutes() {
+  return Object.fromEntries(modelKinds.map((kind) => [kind.id, { defaultRouteId: '', routes: [] }]))
+}
+
+function routeId(kind, index) {
+  return `${kind}-${Date.now().toString(36)}-${index + 1}`
+}
+
+function normalizeModelRoutes(input = {}) {
+  const output = createEmptyModelRoutes()
+  for (const kind of modelKinds) {
+    const source = input?.[kind.id] || {}
+    const routes = Array.isArray(source.routes) ? source.routes.slice(0, 5) : []
+    output[kind.id].routes = routes.map((route, index) => ({
+      id: String(route.id || routeId(kind.id, index)),
+      enabled: route.enabled !== false,
+      name: String(route.name || `线路 ${index + 1}`),
+      protocol: protocolOptions.some(([value]) => value === route.protocol) ? route.protocol : (kind.id === 'gemini' ? 'openai-chat' : 'openai-images'),
+      endpoint: String(route.endpoint || ''),
+      model: String(route.model || kind.defaultModel),
+      apiKey: String(route.apiKey || ''),
+      uploadMode: uploadModeOptions.some(([value]) => value === route.uploadMode) ? route.uploadMode : 'base64',
+    }))
+    if (!output[kind.id].routes.length) {
+      output[kind.id].routes.push({
+        id: routeId(kind.id, 0),
+        enabled: true,
+        name: '默认线路',
+        protocol: kind.id === 'gemini' ? 'openai-chat' : 'openai-images',
+        endpoint: '',
+        model: kind.defaultModel,
+        apiKey: '',
+        uploadMode: 'base64',
+      })
+    }
+    const requestedDefault = String(source.defaultRouteId || '')
+    output[kind.id].defaultRouteId = output[kind.id].routes.some((route) => route.id === requestedDefault)
+      ? requestedDefault
+      : output[kind.id].routes[0].id
+  }
+  return output
+}
+
+function optionHtml(options, selected) {
+  return options.map(([value, label]) => `<option value="${escapeHtml(value)}"${value === selected ? ' selected' : ''}>${escapeHtml(label)}</option>`).join('')
+}
+
+function renderRouteSections() {
+  for (const kind of modelKinds) renderRouteSection(kind.id)
+}
+
+function renderRouteSection(kindId) {
+  const group = modelRoutesDraft[kindId] || { defaultRouteId: '', routes: [] }
+  const select = document.getElementById(`${kindId}_default_route`)
+  const list = document.getElementById(`${kindId}_routes`)
+  select.innerHTML = group.routes.map((route) => `<option value="${escapeHtml(route.id)}"${route.id === group.defaultRouteId ? ' selected' : ''}>${escapeHtml(route.name || route.id)}</option>`).join('')
+  list.innerHTML = group.routes.map((route, index) => renderRouteCard(kindId, route, index, route.id === group.defaultRouteId)).join('')
+}
+
+function renderRouteCard(kindId, route, index, isDefault) {
+  return `
+    <div class="route-card">
+      <div class="route-card-head">
+        <div class="route-title">
+          <label class="checkline"><input type="checkbox" ${route.enabled ? 'checked' : ''} onchange="setRouteField('${kindId}', ${index}, 'enabled', this.checked)" />启用</label>
+          <span>${escapeHtml(route.name || `线路 ${index + 1}`)}</span>
+          ${isDefault ? '<span class="default-badge">默认</span>' : ''}
+        </div>
+        <div class="route-actions">
+          <button class="ghost small" onclick="setDefaultRoute('${kindId}', '${escapeHtml(route.id)}')">设为默认</button>
+          <button class="danger small" onclick="removeRoute('${kindId}', ${index})">删除</button>
+        </div>
+      </div>
+      <div class="route-grid">
+        <label><span>线路名称</span><input value="${escapeHtml(route.name)}" oninput="setRouteField('${kindId}', ${index}, 'name', this.value, false)" /></label>
+        <label><span>调用协议</span><select onchange="setRouteField('${kindId}', ${index}, 'protocol', this.value)">${optionHtml(protocolOptions, route.protocol)}</select></label>
+        <label class="route-endpoint"><span>调用地址</span><input value="${escapeHtml(route.endpoint)}" placeholder="https://backgrace.com/v1/gpt-image-2" oninput="setRouteField('${kindId}', ${index}, 'endpoint', this.value, false)" /></label>
+        <label><span>模型名</span><input value="${escapeHtml(route.model)}" placeholder="gpt-image-2" oninput="setRouteField('${kindId}', ${index}, 'model', this.value, false)" /></label>
+        <label><span>API Key</span><input value="${escapeHtml(route.apiKey)}" placeholder="留空不修改" oninput="setRouteField('${kindId}', ${index}, 'apiKey', this.value, false)" /></label>
+        <label><span>参考图上传方式</span><select onchange="setRouteField('${kindId}', ${index}, 'uploadMode', this.value)">${optionHtml(uploadModeOptions, route.uploadMode)}</select></label>
+      </div>
+    </div>
+  `
+}
+
+function setRouteField(kindId, index, field, value, rerender = true) {
+  const route = modelRoutesDraft[kindId]?.routes?.[index]
+  if (!route) return
+  route[field] = value
+  if (field === 'name') {
+    const select = document.getElementById(`${kindId}_default_route`)
+    if (select?.options[index]) select.options[index].textContent = value || route.id
+  }
+  if (rerender) renderRouteSection(kindId)
+}
+
+function addRoute(kindId) {
+  const kind = modelKinds.find((item) => item.id === kindId)
+  const group = modelRoutesDraft[kindId]
+  if (!kind || !group) return
+  if (group.routes.length >= 5) {
+    alert('每个模型最多配置 5 条线路')
+    return
+  }
+  const index = group.routes.length
+  const route = {
+    id: routeId(kindId, index),
+    enabled: true,
+    name: `线路 ${index + 1}`,
+    protocol: kindId === 'gemini' ? 'openai-chat' : 'openai-images',
+    endpoint: '',
+    model: kind.defaultModel,
+    apiKey: '',
+    uploadMode: 'base64',
+  }
+  group.routes.push(route)
+  if (!group.defaultRouteId) group.defaultRouteId = route.id
+  renderRouteSection(kindId)
+}
+
+function removeRoute(kindId, index) {
+  const group = modelRoutesDraft[kindId]
+  if (!group || group.routes.length <= 1) {
+    alert('至少保留 1 条线路')
+    return
+  }
+  const [removed] = group.routes.splice(index, 1)
+  if (removed?.id === group.defaultRouteId) group.defaultRouteId = group.routes[0]?.id || ''
+  renderRouteSection(kindId)
+}
+
+function setDefaultRoute(kindId, routeId) {
+  const group = modelRoutesDraft[kindId]
+  if (!group) return
+  group.defaultRouteId = routeId
+  renderRouteSection(kindId)
+}
+
 async function loadSettings() {
   const data = await api('/api/admin/settings')
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']) {
+  for (const key of basicSettingKeys) {
     document.getElementById(key).value = data[key] || ''
   }
+  modelRoutesDraft = normalizeModelRoutes(data.model_routes)
+  renderRouteSections()
 }
 
 async function saveSettings() {
   const payload = {}
-  for (const key of ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'announcement_text', 'gate_notice_text', 'blocked_words']) {
+  for (const key of basicSettingKeys) {
     payload[key] = document.getElementById(key).value
   }
+  payload.model_routes = modelRoutesDraft
   await api('/api/admin/settings', { method: 'POST', body: JSON.stringify(payload) })
   document.getElementById('settingsMsg').textContent = '已保存'
   setTimeout(() => document.getElementById('settingsMsg').textContent = '', 1800)
