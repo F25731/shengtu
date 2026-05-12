@@ -798,8 +798,35 @@ function getModelForKind(settings, kind) {
   return String(settings.image_model || 'gpt-image-2').trim()
 }
 
+function getProtocolProvider(route) {
+  if (route?.protocol === 'ai6800-media') return 'ai6800'
+  if (String(route?.endpoint || '').toLowerCase().includes('ai6800')) return 'ai6800'
+  return 'custom'
+}
+
+function getSelectedModelRoute(settings, kind) {
+  const config = getModelRoutes(settings)
+  const route = getDefaultModelRoute(config, kind)
+  if (!route) return null
+  const apiUrl = String(route.endpoint || '').replace(/\/+$/, '')
+  const hydrated = {
+    ...route,
+    kind,
+    provider: getProtocolProvider(route),
+    apiUrl,
+    apiKey: String(route.apiKey || '').trim(),
+    model: String(route.model || getModelForKind(settings, kind)).trim(),
+  }
+  if (hydrated.protocol === 'ai6800-media') hydrated.apiUrl = getAi6800BaseUrl(hydrated)
+  return {
+    ...hydrated,
+  }
+}
+
 function resolveProxyRoute(settings, pathname, contentType, body) {
   const kind = getProxyModelKind(pathname, contentType, body)
+  const configuredRoute = getSelectedModelRoute(settings, kind)
+  if (configuredRoute) return configuredRoute
   const providerSetting = kind === 'gemini'
     ? settings.gemini_provider
     : kind === 'grok'
@@ -824,20 +851,124 @@ function resolveProxyRoute(settings, pathname, contentType, body) {
   }
 }
 
-function buildProxyBody(contentType, body, settings, apiPath, modelKind = '') {
+function isFullProxyEndpoint(endpoint) {
+  try {
+    const url = new URL(endpoint)
+    return /\/(images\/generations|chat\/completions|media\/generate|v1beta\/models\/[^/]+:(?:streamGenerateContent|generateContent))$/i.test(url.pathname)
+  } catch {
+    return false
+  }
+}
+
+function buildOpenAiProxyTargetUrl(route, pathname) {
+  let endpoint = String(route.apiUrl || '').replace(/\/+$/, '')
+  if (isFullProxyEndpoint(endpoint)) return endpoint
+  try {
+    const url = new URL(endpoint)
+    const modelSegment = `/${encodeURIComponent(String(route.model || '')).replace(/%20/g, '+')}`
+    const rawModelSegment = `/${String(route.model || '')}`
+    if (route.model && (url.pathname.endsWith(modelSegment) || url.pathname.endsWith(rawModelSegment))) {
+      url.pathname = url.pathname.slice(0, -rawModelSegment.length) || '/'
+      endpoint = url.toString().replace(/\/+$/, '')
+    }
+  } catch {
+    // Keep the original endpoint if it is not a URL.
+  }
+  const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
+  return `${endpoint}/${apiPath}`
+}
+
+function getAi6800BaseUrl(route) {
+  const endpoint = String(route.apiUrl || 'https://api.ai6800.com').replace(/\/+$/, '')
+  return endpoint
+    .replace(/\/v1\/media\/generate$/i, '')
+    .replace(/\/v1\/media\/status$/i, '')
+}
+
+function imageStringToGeminiPart(value) {
+  const text = String(value || '').trim()
+  const data = dataUrlToImagePayload(text)
+  if (data) return { inlineData: { mimeType: data.mime, data: data.b64Json } }
+  if (/^https?:\/\//i.test(text)) return { fileData: { fileUri: text } }
+  return null
+}
+
+function buildGeminiGenerateContentBody(contentType, body, prompt) {
+  const multipart = contentType.includes('multipart/form-data') ? parseMultipartBody(contentType, body) : { images: [] }
+  const jsonData = readJsonRequestData(contentType, body)
+  const params = getRequestParams(contentType, body)
+  const images = [
+    ...collectImageStrings(jsonData.images),
+    ...collectImageStrings(jsonData.input),
+    ...collectImageStrings(jsonData.messages),
+    ...multipart.images,
+  ].slice(0, 14)
+  const parts = [{ text: prompt }, ...images.map(imageStringToGeminiPart).filter(Boolean)]
+  const size = String(params.size || 'auto')
+  return Buffer.from(JSON.stringify({
+    contents: [{ role: 'user', parts }],
+    generationConfig: {
+      imageConfig: { aspectRatio: String(params.aspectRatio || getGeminiAspectRatio(size)) },
+      responseModalities: ['IMAGE', 'TEXT'],
+    },
+  }))
+}
+
+function normalizeGeminiGenerateContentParsed(parsed) {
+  const payload = parsed?.body
+  if (!payload || typeof payload !== 'object') return parsed
+  const images = []
+  const walk = (value) => {
+    if (!value) return
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item)
+      return
+    }
+    if (typeof value !== 'object') return
+    const inline = value.inlineData || value.inline_data
+    const data = inline?.data
+    if (typeof data === 'string') {
+      images.push({
+        mime: inline.mimeType || inline.mime_type || 'image/png',
+        b64Json: data,
+      })
+    }
+    for (const item of Object.values(value)) walk(item)
+  }
+  walk(payload)
+  if (!images.length) return parsed
+  return {
+    body: {
+      choices: [
+        {
+          message: {
+            role: 'assistant',
+            content: images.map((item) => `![image](data:${item.mime};base64,${item.b64Json})`).join('\n'),
+          },
+        },
+      ],
+    },
+    bodyText: '',
+  }
+}
+
+function buildProxyBody(contentType, body, settings, apiPath, routeOrKind = '') {
+  const route = typeof routeOrKind === 'object' && routeOrKind ? routeOrKind : null
+  const modelKind = route?.kind || routeOrKind || ''
+  const model = route?.model || getModelForKind(settings, modelKind)
+  const prompt = extractPrompt(contentType, body)
+  if (route?.protocol === 'gemini-generate-content') return buildGeminiGenerateContentBody(contentType, body, prompt)
   if (!contentType.includes('application/json')) return body
   try {
     const data = parseJsonBody(body)
     const path = `/${String(apiPath || '').replace(/^\/+/, '')}`
-    if (path.includes('/chat/completions')) {
-      if (settings.gemini_model) data.model = settings.gemini_model
-    } else if (modelKind === 'grok' && settings.grok_model) {
-      data.model = settings.grok_model
-    } else if (settings.image_model) {
-      data.model = settings.image_model
+    if (path.includes('/chat/completions') || route?.protocol === 'openai-chat') {
+      if (model) data.model = model
+    } else if (model) {
+      data.model = model
     }
     delete data.yunyi_params
-    if (path.includes('/images/')) data.response_format = 'b64_json'
+    if (path.includes('/images/') || route?.protocol === 'openai-images') data.response_format = 'b64_json'
     return Buffer.from(JSON.stringify(data))
   } catch {
     return body
@@ -1027,8 +1158,12 @@ async function handleImageProxyTaskMode(req, res, pathname) {
   const body = await readBody(req)
   const route = resolveProxyRoute(settings, pathname, contentType, body)
   if (!route.apiKey) {
-    const providerName = route.provider === 'ai6800' ? 'ai6800' : 'BackGrace'
+    const providerName = route.name || route.provider || '当前线路'
     sendJson(res, 503, { error: { message: `生图服务暂未完成后台配置，请填写 ${providerName} API Key 后再试` } })
+    return
+  }
+  if (!route.apiUrl) {
+    sendJson(res, 503, { error: { message: `生图服务暂未完成后台配置，请填写 ${route.name || '当前线路' } 调用地址` } })
     return
   }
   const prompt = extractPrompt(contentType, body)
@@ -1098,7 +1233,7 @@ async function handleImageProxyTaskMode(req, res, pathname) {
     balance: getCardsBalance(codes),
   })
 
-  const runner = route.provider === 'ai6800' ? runAi6800ProxyJob : runImageProxyJob
+  const runner = route.protocol === 'ai6800-media' ? runAi6800ProxyJob : runImageProxyJob
   runner(job, {
     reqAccept: String(req.headers.accept || 'application/json'),
     settings,
@@ -1117,14 +1252,13 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
 
   try {
     touchProxyJob(job, { status: 'running' })
-    const apiPath = pathname.replace(/^\/api-proxy\/(?:v1\/?)?/, '')
-    const targetUrl = `${route.apiUrl}/${apiPath}`
-    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route.kind)
+    const targetUrl = buildOpenAiProxyTargetUrl(route, pathname)
+    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route)
     const response = await fetch(targetUrl, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${route.apiKey}`,
-        'Content-Type': contentType || 'application/json',
+        'Content-Type': route.protocol === 'gemini-generate-content' ? 'application/json' : (contentType || 'application/json'),
         Accept: reqAccept,
       },
       body: proxyBody,
@@ -1150,6 +1284,7 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
       return
     }
 
+    if (route.protocol === 'gemini-generate-content') parsed = normalizeGeminiGenerateContentParsed(parsed)
     updateUsageLog(logId, 'success')
     touchProxyJob(job, {
       status: 'success',
