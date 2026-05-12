@@ -27,6 +27,9 @@ const tempImageCleanupIntervalMs = Number.isFinite(configuredTempImageCleanupInt
 let lastTempImageCleanupAt = 0
 const ai6800PollIntervalMs = 5 * 1000
 const ai6800MaxPollMs = 30 * 60 * 1000
+const routeProbeIntervalMs = 15 * 60 * 1000
+const routeProbeTimeoutMs = 4 * 60 * 1000
+const routeProbePrompt = process.env.YUNYI_ROUTE_PROBE_PROMPT || '生成一张简单的蓝天白云风景小图'
 const defaultInputImageLimit = 16
 const defaultInputImageMb = 10
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
@@ -165,6 +168,18 @@ function setSettings(input) {
 const routeKinds = ['chatgpt', 'gemini', 'grok']
 const routeProtocols = new Set(['openai-images', 'openai-chat', 'gemini-generate-content', 'ai6800-media'])
 const uploadModes = new Set(['base64', 'url'])
+const routeProbeLocks = new Set()
+
+const routeDefaultProbeTimer = setInterval(() => {
+  for (const kind of routeKinds) {
+    const health = getRouteHealthConfig()
+    const group = health[kind]
+    if (!group?.defaultDown) continue
+    const dueAt = Number(group.nextDefaultProbeAt || 0)
+    if (!dueAt || dueAt <= Date.now()) triggerRouteProbe(kind, 'scheduled-default-check')
+  }
+}, 60 * 1000)
+routeDefaultProbeTimer.unref?.()
 
 function normalizePositiveInt(value, fallback, min = 1, max = 1000) {
   const n = Math.floor(Number(value))
@@ -318,6 +333,187 @@ function getDefaultModelRoute(config, kind) {
   const group = config?.[kind]
   if (!group) return null
   return group.routes.find((route) => route.id === group.defaultRouteId) || group.routes.find((route) => route.enabled) || group.routes[0] || null
+}
+
+function getRouteHealthConfig() {
+  const raw = selectOne('SELECT value FROM settings WHERE key = ?', ['route_health'])?.value
+  if (!raw) return {}
+  try {
+    const parsed = JSON.parse(raw)
+    return parsed && typeof parsed === 'object' ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveRouteHealthConfig(health) {
+  run('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)', ['route_health', JSON.stringify(health || {})])
+}
+
+function ensureRouteHealthGroup(health, kind) {
+  if (!health[kind] || typeof health[kind] !== 'object') {
+    health[kind] = {
+      activeRouteId: '',
+      activeStatus: 'unknown',
+      defaultRouteId: '',
+      defaultDown: false,
+      probing: false,
+      nextDefaultProbeAt: 0,
+      lastUpdatedAt: '',
+      lastReason: '',
+      routes: {},
+    }
+  }
+  if (!health[kind].routes || typeof health[kind].routes !== 'object') health[kind].routes = {}
+  return health[kind]
+}
+
+function ensureRouteHealthEntry(group, routeId) {
+  if (!group.routes[routeId] || typeof group.routes[routeId] !== 'object') {
+    group.routes[routeId] = {
+      status: 'unknown',
+      lastSuccessAt: '',
+      lastFailureAt: '',
+      lastProbeAt: '',
+      lastError: '',
+      latencyMs: 0,
+      successCount: 0,
+      failureCount: 0,
+    }
+  }
+  return group.routes[routeId]
+}
+
+function isRouteConfigured(route) {
+  return Boolean(route?.enabled !== false && String(route?.endpoint || '').trim() && String(route?.apiKey || '').trim())
+}
+
+function hydrateModelRoute(settings, kind, route) {
+  if (!route) return null
+  const apiUrl = String(route.endpoint || '').replace(/\/+$/, '')
+  const hydrated = {
+    ...route,
+    kind,
+    provider: getProtocolProvider(route),
+    apiUrl,
+    apiKey: String(route.apiKey || '').trim(),
+    model: String(route.model || getModelForKind(settings, kind)).trim(),
+  }
+  if (hydrated.protocol === 'ai6800-media') hydrated.apiUrl = getAi6800BaseUrl(hydrated)
+  return hydrated
+}
+
+function chooseRouteForKind(settings, kind) {
+  const config = getModelRoutes(settings)
+  const group = config?.[kind]
+  const routes = (group?.routes || []).filter((route) => route.enabled !== false)
+  if (!routes.length) return null
+  const health = getRouteHealthConfig()
+  const healthGroup = ensureRouteHealthGroup(health, kind)
+  const defaultRoute = routes.find((route) => route.id === group.defaultRouteId) || routes[0]
+  const defaultEntry = defaultRoute ? healthGroup.routes?.[defaultRoute.id] : null
+  const defaultDown = Boolean((healthGroup.defaultDown && (!healthGroup.defaultRouteId || healthGroup.defaultRouteId === group.defaultRouteId)) || defaultEntry?.status === 'unhealthy')
+  if (defaultRoute && isRouteConfigured(defaultRoute) && !defaultDown) {
+    return hydrateModelRoute(settings, kind, defaultRoute)
+  }
+  const configured = routes.filter(isRouteConfigured)
+  const activeRoute = configured.find((route) => route.id === healthGroup.activeRouteId)
+  const activeEntry = activeRoute ? healthGroup.routes?.[activeRoute.id] : null
+  if (activeRoute && activeEntry?.status === 'healthy') return hydrateModelRoute(settings, kind, activeRoute)
+  if (activeRoute && healthGroup.activeStatus === 'unconfirmed') return hydrateModelRoute(settings, kind, activeRoute)
+  const nextBackup = configured.find((route) => route.id !== defaultRoute?.id && healthGroup.routes?.[route.id]?.status !== 'unhealthy')
+  if (nextBackup) return hydrateModelRoute(settings, kind, nextBackup)
+  if (healthGroup.activeStatus === 'unconfirmed') return hydrateModelRoute(settings, kind, configured[0] || routes[0])
+  const anyBackup = configured.find((route) => route.id !== defaultRoute?.id)
+  if (anyBackup) return hydrateModelRoute(settings, kind, anyBackup)
+  return hydrateModelRoute(settings, kind, defaultRoute || configured[0] || routes[0])
+}
+
+function recordRouteResult(route, ok, message = '', latencyMs = 0, options = {}) {
+  if (!route?.kind || !route?.id) return
+  const settings = getSettings()
+  const config = getModelRoutes(settings)
+  const defaultRouteId = config?.[route.kind]?.defaultRouteId || ''
+  const health = getRouteHealthConfig()
+  const group = ensureRouteHealthGroup(health, route.kind)
+  const entry = ensureRouteHealthEntry(group, route.id)
+  const at = nowIso()
+  entry.status = ok ? 'healthy' : 'unhealthy'
+  entry.latencyMs = Math.max(0, Math.round(Number(latencyMs || 0)))
+  entry.lastError = ok ? '' : String(message || '').slice(0, 300)
+  if (ok) {
+    entry.lastSuccessAt = at
+    entry.successCount = Number(entry.successCount || 0) + 1
+  } else {
+    entry.lastFailureAt = at
+    entry.failureCount = Number(entry.failureCount || 0) + 1
+  }
+  group.lastUpdatedAt = at
+  group.lastReason = options.reason || (ok ? 'success' : 'failure')
+  group.defaultRouteId = defaultRouteId
+  if (ok && route.id === defaultRouteId) {
+    group.defaultDown = false
+    group.activeRouteId = route.id
+    group.activeStatus = 'default'
+    group.nextDefaultProbeAt = 0
+  } else if (!ok && route.id === defaultRouteId) {
+    group.defaultDown = true
+    group.activeStatus = 'probing'
+    group.nextDefaultProbeAt = Date.now() + routeProbeIntervalMs
+    if (group.activeRouteId === route.id) group.activeRouteId = ''
+  } else if (ok && group.defaultDown) {
+    group.activeRouteId = route.id
+    group.activeStatus = 'backup'
+  } else if (!ok && group.activeRouteId === route.id) {
+    group.activeRouteId = ''
+    group.activeStatus = 'unconfirmed'
+  }
+  saveRouteHealthConfig(health)
+  if (!ok && options.triggerProbe !== false) triggerRouteProbe(route.kind, 'route-failed')
+}
+
+function buildRouteHealthOverview() {
+  const settings = getSettings()
+  const config = getModelRoutes(settings)
+  const health = getRouteHealthConfig()
+  const overview = {}
+  for (const kind of routeKinds) {
+    const group = config[kind] || { defaultRouteId: '', routes: [] }
+    const healthGroup = ensureRouteHealthGroup(health, kind)
+    const selected = chooseRouteForKind(settings, kind)
+    overview[kind] = {
+      defaultRouteId: group.defaultRouteId,
+      activeRouteId: selected?.id || healthGroup.activeRouteId || '',
+      activeStatus: healthGroup.activeStatus || 'unknown',
+      defaultDown: Boolean(healthGroup.defaultDown),
+      probing: Boolean(healthGroup.probing),
+      nextDefaultProbeAt: healthGroup.nextDefaultProbeAt || 0,
+      lastUpdatedAt: healthGroup.lastUpdatedAt || '',
+      lastReason: healthGroup.lastReason || '',
+      routes: group.routes.map((route, index) => {
+        const entry = healthGroup.routes?.[route.id] || {}
+        return {
+          id: route.id,
+          name: route.name || `Route ${index + 1}`,
+          enabled: route.enabled !== false,
+          configured: isRouteConfigured(route),
+          isDefault: route.id === group.defaultRouteId,
+          isActive: route.id === selected?.id,
+          protocol: route.protocol,
+          endpoint: route.endpoint ? route.endpoint.replace(/(sk-[A-Za-z0-9_-]{6})[A-Za-z0-9_-]+/g, '$1***') : '',
+          status: route.enabled === false ? 'disabled' : (entry.status || 'unknown'),
+          lastSuccessAt: entry.lastSuccessAt || '',
+          lastFailureAt: entry.lastFailureAt || '',
+          lastProbeAt: entry.lastProbeAt || '',
+          lastError: entry.lastError || '',
+          latencyMs: entry.latencyMs || 0,
+          successCount: entry.successCount || 0,
+          failureCount: entry.failureCount || 0,
+        }
+      }),
+    }
+  }
+  return overview
 }
 
 function providerFromModelRoute(route) {
@@ -920,22 +1116,7 @@ function getProtocolProvider(route) {
 }
 
 function getSelectedModelRoute(settings, kind) {
-  const config = getModelRoutes(settings)
-  const route = getDefaultModelRoute(config, kind)
-  if (!route) return null
-  const apiUrl = String(route.endpoint || '').replace(/\/+$/, '')
-  const hydrated = {
-    ...route,
-    kind,
-    provider: getProtocolProvider(route),
-    apiUrl,
-    apiKey: String(route.apiKey || '').trim(),
-    model: String(route.model || getModelForKind(settings, kind)).trim(),
-  }
-  if (hydrated.protocol === 'ai6800-media') hydrated.apiUrl = getAi6800BaseUrl(hydrated)
-  return {
-    ...hydrated,
-  }
+  return chooseRouteForKind(settings, kind)
 }
 
 function resolveProxyRoute(settings, pathname, contentType, body) {
@@ -1278,6 +1459,7 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
 
   try {
     touchProxyJob(job, { status: 'running' })
+    const startedAt = Date.now()
     const targetUrl = buildOpenAiProxyTargetUrl(route, pathname)
     const proxyBody = buildProxyBody(contentType, body, settings, pathname, route, publicBaseUrl, job.tempFiles)
     const response = await fetch(targetUrl, {
@@ -1297,6 +1479,7 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
       const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
       const detail = getProxyCustomerErrorMessage(parsed, rawDetail)
       parsed = normalizeProxyParsedError(parsed, detail)
+      recordRouteResult(route, false, detail, Date.now() - startedAt)
       refundCredits(chargedCard, cost)
       updateUsageLog(logId, 'refunded', detail)
       touchProxyJob(job, {
@@ -1311,6 +1494,7 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
     }
 
     if (route.protocol === 'gemini-generate-content') parsed = normalizeGeminiGenerateContentParsed(parsed)
+    recordRouteResult(route, true, '', Date.now() - startedAt)
     updateUsageLog(logId, 'success')
     touchProxyJob(job, {
       status: 'success',
@@ -1323,6 +1507,7 @@ async function runImageProxyJob(job, { reqAccept, settings, route, pathname, con
     refundCredits(chargedCard, cost)
     const rawMessage = err instanceof Error ? err.message : String(err)
     const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
+    recordRouteResult(route, false, message)
     updateUsageLog(logId, 'refunded', message)
     touchProxyJob(job, {
       status: 'error',
@@ -1528,9 +1713,9 @@ async function fetchAi6800Json(url, route, options = {}) {
   return json
 }
 
-async function pollAi6800Task(route, taskId) {
+async function pollAi6800Task(route, taskId, maxPollMs = ai6800MaxPollMs) {
   const startedAt = Date.now()
-  while (Date.now() - startedAt < ai6800MaxPollMs) {
+  while (Date.now() - startedAt < maxPollMs) {
     const url = `${route.apiUrl}/v1/media/status?task_id=${encodeURIComponent(taskId)}`
     const status = await fetchAi6800Json(url, route, { method: 'GET', headers: { 'Content-Type': undefined } })
     const isFinal = status?.is_final === true || status?.is_final === 'true'
@@ -1539,6 +1724,201 @@ async function pollAi6800Task(route, taskId) {
     await sleep(ai6800PollIntervalMs)
   }
   throw new Error('任务生成时间较长，请稍后刷新或重试')
+}
+
+function hasImagePayload(value) {
+  if (!value) return false
+  if (typeof value === 'string') return /^(data:image\/|https?:\/\/)/i.test(value.trim())
+  if (Array.isArray(value)) return value.some(hasImagePayload)
+  if (typeof value === 'object') {
+    if (typeof value.b64_json === 'string' && value.b64_json) return true
+    if (typeof value.url === 'string' && /^https?:\/\//i.test(value.url)) return true
+    if (value.inlineData?.data || value.inline_data?.data) return true
+    return Object.values(value).some(hasImagePayload)
+  }
+  return false
+}
+
+function getProbePath(route) {
+  if (route.protocol === 'openai-chat') return '/api-proxy/v1/chat/completions'
+  if (route.protocol === 'gemini-generate-content') return `/api-proxy/v1beta/models/${encodeURIComponent(route.model || 'gemini-3-pro-image-preview')}:generateContent`
+  return '/api-proxy/v1/images/generations'
+}
+
+function getProbeBody(route) {
+  if (route.protocol === 'openai-chat') {
+    return Buffer.from(JSON.stringify({
+      model: route.model,
+      messages: [{ role: 'user', content: routeProbePrompt }],
+      stream: false,
+    }))
+  }
+  return Buffer.from(JSON.stringify({
+    model: route.model,
+    prompt: routeProbePrompt,
+    size: '1024x1024',
+    quality: 'low',
+    output_format: 'png',
+    moderation: 'auto',
+    n: 1,
+    response_format: 'b64_json',
+  }))
+}
+
+async function probeAi6800Route(route) {
+  const contentType = 'application/json'
+  const body = getProbeBody(route)
+  const submitPayload = buildAi6800SubmitPayload({
+    route,
+    contentType,
+    body,
+    prompt: routeProbePrompt,
+    publicBaseUrl: '',
+    tempFiles: [],
+  })
+  const submit = await fetchAi6800Json(`${route.apiUrl}/v1/media/generate`, route, {
+    method: 'POST',
+    body: JSON.stringify(submitPayload),
+  })
+  const taskId = extractTaskIdFromPayload(submit)
+  if (!taskId) throw new Error('Probe submit did not return task_id')
+  const finalStatus = await pollAi6800Task(route, taskId, routeProbeTimeoutMs)
+  const state = String(finalStatus?.state || '').toLowerCase()
+  if (state === 'failed') throw new Error(String(finalStatus?.error || finalStatus?.status || 'Probe failed'))
+  const urls = extractAi6800ResultUrls(finalStatus)
+  if (!urls.length) throw new Error('Probe finished without image URL')
+}
+
+async function probeDirectRoute(settings, route) {
+  const contentType = 'application/json'
+  const pathname = getProbePath(route)
+  const body = getProbeBody(route)
+  const tempFiles = []
+  try {
+    const targetUrl = buildOpenAiProxyTargetUrl(route, pathname)
+    const proxyBody = buildProxyBody(contentType, body, settings, pathname, route, '', tempFiles)
+    const response = await fetch(targetUrl, {
+      method: 'POST',
+      signal: AbortSignal.timeout(routeProbeTimeoutMs),
+      headers: {
+        Authorization: `Bearer ${route.apiKey}`,
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: proxyBody,
+    })
+    const responseBuffer = Buffer.from(await response.arrayBuffer())
+    const responseType = response.headers.get('content-type') || 'application/json; charset=utf-8'
+    let parsed = parseProxyResponseBody(responseBuffer, responseType)
+    if (!response.ok) {
+      const rawDetail = responseBuffer.toString('utf8').slice(0, 2000)
+      throw new Error(getProxyCustomerErrorMessage(parsed, rawDetail))
+    }
+    if (route.protocol === 'gemini-generate-content') parsed = normalizeGeminiGenerateContentParsed(parsed)
+    if (!hasImagePayload(parsed.body)) throw new Error('Probe response did not include an image')
+  } finally {
+    cleanupTempFiles(tempFiles)
+  }
+}
+
+async function probeRoute(settings, route) {
+  if (!isRouteConfigured(route)) throw new Error('Route is not fully configured')
+  const hydrated = hydrateModelRoute(settings, route.kind, route)
+  if (hydrated.protocol === 'ai6800-media') return probeAi6800Route(hydrated)
+  return probeDirectRoute(settings, hydrated)
+}
+
+function markRouteProbing(kind, routeId) {
+  const health = getRouteHealthConfig()
+  const group = ensureRouteHealthGroup(health, kind)
+  const entry = ensureRouteHealthEntry(group, routeId)
+  entry.status = 'probing'
+  entry.lastProbeAt = nowIso()
+  group.probing = true
+  group.lastUpdatedAt = nowIso()
+  saveRouteHealthConfig(health)
+}
+
+function finishRouteProbe(kind) {
+  const health = getRouteHealthConfig()
+  const group = ensureRouteHealthGroup(health, kind)
+  group.probing = false
+  group.lastUpdatedAt = nowIso()
+  saveRouteHealthConfig(health)
+}
+
+function setRouteProbeUnconfirmed(kind, routeId, reason) {
+  const health = getRouteHealthConfig()
+  const group = ensureRouteHealthGroup(health, kind)
+  group.activeRouteId = routeId || ''
+  group.activeStatus = 'unconfirmed'
+  group.lastReason = reason || 'all-probes-failed'
+  group.lastUpdatedAt = nowIso()
+  saveRouteHealthConfig(health)
+}
+
+async function runRouteProbe(kind, reason = 'manual') {
+  const settings = getSettings()
+  const config = getModelRoutes(settings)
+  const group = config[kind]
+  if (!group) return
+  const routes = (group.routes || []).filter((route) => route.enabled !== false)
+  const defaultRoute = routes.find((route) => route.id === group.defaultRouteId) || routes[0]
+  const health = getRouteHealthConfig()
+  const healthGroup = ensureRouteHealthGroup(health, kind)
+  if (healthGroup.defaultRouteId && healthGroup.defaultRouteId !== group.defaultRouteId) {
+    healthGroup.defaultDown = false
+    healthGroup.activeRouteId = group.defaultRouteId || ''
+    healthGroup.activeStatus = 'default'
+    healthGroup.nextDefaultProbeAt = 0
+  }
+  healthGroup.defaultRouteId = group.defaultRouteId || ''
+  healthGroup.probing = true
+  healthGroup.lastReason = reason
+  healthGroup.lastUpdatedAt = nowIso()
+  saveRouteHealthConfig(health)
+
+  try {
+    if (defaultRoute && healthGroup.defaultDown && Number(healthGroup.nextDefaultProbeAt || 0) <= Date.now()) {
+      markRouteProbing(kind, defaultRoute.id)
+      const startedAt = Date.now()
+      try {
+        await probeRoute(settings, defaultRoute)
+        recordRouteResult(hydrateModelRoute(settings, kind, defaultRoute), true, '', Date.now() - startedAt, { reason: 'default-probe-success', triggerProbe: false })
+        return
+      } catch (err) {
+        recordRouteResult(hydrateModelRoute(settings, kind, defaultRoute), false, err instanceof Error ? err.message : String(err), Date.now() - startedAt, { reason: 'default-probe-failed', triggerProbe: false })
+      }
+    }
+
+    const backups = routes.filter((route) => route.id !== defaultRoute?.id && isRouteConfigured(route))
+    for (const route of backups) {
+      markRouteProbing(kind, route.id)
+      const startedAt = Date.now()
+      try {
+        await probeRoute(settings, route)
+        recordRouteResult(hydrateModelRoute(settings, kind, route), true, '', Date.now() - startedAt, { reason: 'backup-probe-success', triggerProbe: false })
+        return
+      } catch (err) {
+        recordRouteResult(hydrateModelRoute(settings, kind, route), false, err instanceof Error ? err.message : String(err), Date.now() - startedAt, { reason: 'backup-probe-failed', triggerProbe: false })
+      }
+    }
+
+    const firstEnabled = routes.find(isRouteConfigured) || routes[0]
+    setRouteProbeUnconfirmed(kind, firstEnabled?.id || '', 'all-probes-failed')
+  } finally {
+    finishRouteProbe(kind)
+  }
+}
+
+function triggerRouteProbe(kind, reason = 'auto') {
+  if (!routeKinds.includes(kind) || routeProbeLocks.has(kind)) return
+  routeProbeLocks.add(kind)
+  setTimeout(() => {
+    runRouteProbe(kind, reason)
+      .catch((err) => console.error(`Route probe failed for ${kind}:`, err instanceof Error ? err.message : err))
+      .finally(() => routeProbeLocks.delete(kind))
+  }, 0).unref?.()
 }
 
 function dataUrlToImagePayload(dataUrl) {
@@ -1581,6 +1961,7 @@ function buildAi6800SuccessBody(route, imagePayloads, resultUrls) {
 
 async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, body, publicBaseUrl }) {
   const { chargedCard, codes, cost, logId, prompt } = job
+  const startedAt = Date.now()
   try {
     touchProxyJob(job, { status: 'running' })
     const submitPayload = buildAi6800SubmitPayload({ route, contentType, body, prompt, publicBaseUrl, tempFiles: job.tempFiles })
@@ -1603,6 +1984,7 @@ async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, 
       if (image) imagePayloads.push(image)
     }
     if (!imagePayloads.length) throw new Error('结果图片下载失败')
+    recordRouteResult(route, true, '', Date.now() - startedAt)
     updateUsageLog(logId, 'success')
     touchProxyJob(job, {
       status: 'success',
@@ -1616,6 +1998,7 @@ async function runAi6800ProxyJob(job, { settings, route, pathname, contentType, 
     refundCredits(chargedCard, cost)
     const rawMessage = err instanceof Error ? err.message : String(err)
     const message = isStreamDisconnectedMessage(rawMessage) ? connectionInterruptedMessage : rawMessage
+    recordRouteResult(route, false, message, Date.now() - startedAt)
     updateUsageLog(logId, 'refunded', message)
     touchProxyJob(job, {
       status: 'error',
@@ -1752,6 +2135,24 @@ async function handleAdmin(req, res, pathname, searchParams) {
         input.model_routes = modelRoutes
       }
       setSettings(input)
+      sendJson(res, 200, { ok: true })
+      return
+    }
+  }
+
+  if (pathname === '/api/admin/route-health') {
+    if (req.method === 'GET') {
+      sendJson(res, 200, { ok: true, health: buildRouteHealthOverview() })
+      return
+    }
+    if (req.method === 'POST') {
+      const input = parseJsonBody(await readBody(req, 1024 * 1024))
+      const kind = String(input.kind || '')
+      if (!routeKinds.includes(kind)) {
+        sendJson(res, 400, { error: { message: 'Invalid route kind' } })
+        return
+      }
+      triggerRouteProbe(kind, 'manual')
       sendJson(res, 200, { ok: true })
       return
     }

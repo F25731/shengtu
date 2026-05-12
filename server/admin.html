@@ -40,6 +40,11 @@
     .form-grid .wide { grid-column:1 / -1; }
     .settings-stack { display:grid; gap:18px; }
     .settings-section { border:1px solid #292d38; border-radius:14px; padding:16px; background:#101218; }
+    .settings-tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+    .settings-tab { background:#20242e; color:#cbd5e1; border:1px solid #303645; }
+    .settings-tab.active { background:#2f6df6; color:#fff; border-color:#2f6df6; }
+    .settings-page { display:none; }
+    .settings-page.active { display:block; }
     .settings-section h3 { margin:0; color:#f4f4f5; font-size:16px; }
     .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:14px; }
     .route-list { display:grid; gap:12px; margin-top:12px; }
@@ -52,6 +57,18 @@
     .checkline input { width:auto; }
     .default-badge { display:inline-flex; align-items:center; border-radius:999px; padding:4px 8px; background:rgba(59,130,246,.16); color:#93c5fd; font-size:12px; }
     .route-actions { display:flex; gap:8px; flex-wrap:wrap; justify-content:flex-end; }
+    .health-grid { display:grid; gap:12px; }
+    .health-card { border:1px solid #2b3140; border-radius:12px; padding:14px; background:#151820; }
+    .health-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:10px; }
+    .health-title { display:flex; align-items:center; gap:8px; font-weight:800; }
+    .health-routes { display:grid; gap:8px; }
+    .health-route { display:grid; grid-template-columns:1fr auto; gap:8px; align-items:start; padding:10px; border-radius:10px; background:#101218; border:1px solid #242936; }
+    .health-route small { display:block; margin-top:4px; color:#81899a; line-height:1.45; word-break:break-all; }
+    .status.healthy { background:rgba(34,197,94,.13); color:#4ade80; }
+    .status.unhealthy { background:rgba(239,68,68,.13); color:#f87171; }
+    .status.probing { background:rgba(59,130,246,.13); color:#60a5fa; }
+    .status.unknown { background:rgba(148,163,184,.13); color:#cbd5e1; }
+    .status.unconfirmed { background:rgba(245,158,11,.14); color:#fbbf24; }
     .toolbar { display:flex; gap:10px; align-items:center; justify-content:space-between; margin-bottom:12px; }
     .filters { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
     .filters input { width:260px; }
@@ -184,8 +201,15 @@
       <button class="ghost" onclick="closeSettingsModal()">关闭</button>
     </div>
     <div class="modal-body">
+      <div class="settings-tabs">
+        <button class="settings-tab active" data-settings-tab="basic" onclick="setSettingsTab('basic')">基础配置</button>
+        <button class="settings-tab" data-settings-tab="chatgpt" onclick="setSettingsTab('chatgpt')">ChatGPT</button>
+        <button class="settings-tab" data-settings-tab="gemini" onclick="setSettingsTab('gemini')">Gemini</button>
+        <button class="settings-tab" data-settings-tab="grok" onclick="setSettingsTab('grok')">Grok</button>
+        <button class="settings-tab" data-settings-tab="health" onclick="setSettingsTab('health')">状态查询</button>
+      </div>
       <div class="settings-stack">
-        <section class="settings-section">
+        <section class="settings-section settings-page active" data-settings-page="basic">
           <div class="section-head">
             <h3>基础设置</h3>
           </div>
@@ -201,7 +225,7 @@
           </div>
         </section>
 
-        <section class="settings-section" data-kind="chatgpt">
+        <section class="settings-section settings-page" data-settings-page="chatgpt" data-kind="chatgpt">
           <div class="section-head">
             <h3>ChatGPT 线路</h3>
             <button class="secondary small" onclick="addRoute('chatgpt')">新增线路</button>
@@ -210,7 +234,7 @@
           <div id="chatgpt_routes" class="route-list"></div>
         </section>
 
-        <section class="settings-section" data-kind="gemini">
+        <section class="settings-section settings-page" data-settings-page="gemini" data-kind="gemini">
           <div class="section-head">
             <h3>Gemini 线路</h3>
             <button class="secondary small" onclick="addRoute('gemini')">新增线路</button>
@@ -219,13 +243,22 @@
           <div id="gemini_routes" class="route-list"></div>
         </section>
 
-        <section class="settings-section" data-kind="grok">
+        <section class="settings-section settings-page" data-settings-page="grok" data-kind="grok">
           <div class="section-head">
             <h3>Grok 线路</h3>
             <button class="secondary small" onclick="addRoute('grok')">新增线路</button>
           </div>
           <label><span>默认线路</span><select id="grok_default_route" onchange="setDefaultRoute('grok', this.value)"></select></label>
           <div id="grok_routes" class="route-list"></div>
+        </section>
+
+        <section class="settings-section settings-page" data-settings-page="health">
+          <div class="section-head">
+            <h3>线路状态查询</h3>
+            <button class="secondary small" onclick="loadRouteHealth()">刷新状态</button>
+          </div>
+          <p class="sub" style="margin-bottom:12px">默认线路失败后会自动探测备用线路；默认线路每 15 分钟探测一次，恢复后新任务自动切回默认。</p>
+          <div id="routeHealthBody" class="health-grid"></div>
         </section>
       </div>
       <div class="row" style="margin-top:18px">
@@ -325,10 +358,21 @@ async function showAdmin() {
 
 function openSettingsModal() {
   document.getElementById('settingsModal').classList.remove('hidden')
+  setSettingsTab('basic')
 }
 
 function closeSettingsModal() {
   document.getElementById('settingsModal').classList.add('hidden')
+}
+
+function setSettingsTab(tab) {
+  document.querySelectorAll('[data-settings-tab]').forEach((button) => {
+    button.classList.toggle('active', button.dataset.settingsTab === tab)
+  })
+  document.querySelectorAll('[data-settings-page]').forEach((page) => {
+    page.classList.toggle('active', page.dataset.settingsPage === tab)
+  })
+  if (tab === 'health') loadRouteHealth()
 }
 
 function createEmptyModelRoutes() {
@@ -408,6 +452,8 @@ function renderRouteCard(kindId, route, index, isDefault) {
           ${isDefault ? '<span class="default-badge">默认</span>' : ''}
         </div>
         <div class="route-actions">
+          <button class="ghost small" onclick="moveRoute('${kindId}', ${index}, -1)">上移</button>
+          <button class="ghost small" onclick="moveRoute('${kindId}', ${index}, 1)">下移</button>
           <button class="ghost small" onclick="setDefaultRoute('${kindId}', '${escapeHtml(route.id)}')">设为默认</button>
           <button class="danger small" onclick="removeRoute('${kindId}', ${index})">删除</button>
         </div>
@@ -477,6 +523,87 @@ function setDefaultRoute(kindId, routeId) {
   if (!group) return
   group.defaultRouteId = routeId
   renderRouteSection(kindId)
+}
+
+function moveRoute(kindId, index, delta) {
+  const group = modelRoutesDraft[kindId]
+  if (!group) return
+  const nextIndex = index + delta
+  if (nextIndex < 0 || nextIndex >= group.routes.length) return
+  const [route] = group.routes.splice(index, 1)
+  group.routes.splice(nextIndex, 0, route)
+  renderRouteSection(kindId)
+}
+
+function healthLabel(status) {
+  const labels = {
+    healthy: '正常',
+    unhealthy: '异常',
+    probing: '探测中',
+    unknown: '未知',
+    disabled: '禁用',
+  }
+  return labels[status] || status || '未知'
+}
+
+function formatHealthTime(value) {
+  if (!value) return '无'
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString()
+}
+
+function renderRouteHealth(data) {
+  const body = document.getElementById('routeHealthBody')
+  const health = data?.health || {}
+  body.innerHTML = modelKinds.map((kind) => {
+    const group = health[kind.id] || { routes: [] }
+    const activeText = group.activeStatus === 'unconfirmed'
+      ? '无确认可用渠道'
+      : group.defaultDown
+        ? '默认异常，使用备用'
+        : '默认正常'
+    const routes = (group.routes || []).map((route) => `
+      <div class="health-route">
+        <div>
+          <strong>${escapeHtml(route.name || route.id)}</strong>
+          <small>${route.isDefault ? '默认线路 · ' : ''}${route.isActive ? '当前使用 · ' : ''}${escapeHtml(route.protocol || '')}</small>
+          <small>${escapeHtml(route.endpoint || '')}</small>
+          <small>最后成功：${escapeHtml(formatHealthTime(route.lastSuccessAt))}；最后失败：${escapeHtml(formatHealthTime(route.lastFailureAt))}</small>
+          ${route.lastError ? `<small class="err">错误：${escapeHtml(route.lastError)}</small>` : ''}
+        </div>
+        <span class="status ${escapeHtml(route.status || 'unknown')}">${escapeHtml(healthLabel(route.status))}</span>
+      </div>
+    `).join('')
+    return `
+      <div class="health-card">
+        <div class="health-head">
+          <div class="health-title">
+            <span>${escapeHtml(kind.label)}</span>
+            <span class="status ${group.activeStatus === 'unconfirmed' ? 'unconfirmed' : group.probing ? 'probing' : group.defaultDown ? 'unhealthy' : 'healthy'}">${escapeHtml(activeText)}</span>
+          </div>
+          <button class="ghost small" onclick="probeRouteKind('${kind.id}')">立即探测</button>
+        </div>
+        <div class="health-routes">${routes || '<p class="muted">暂无线路</p>'}</div>
+      </div>
+    `
+  }).join('')
+}
+
+async function loadRouteHealth() {
+  const body = document.getElementById('routeHealthBody')
+  if (!body) return
+  body.innerHTML = '<p class="muted">正在读取线路状态...</p>'
+  try {
+    const data = await api('/api/admin/route-health')
+    renderRouteHealth(data)
+  } catch (err) {
+    body.innerHTML = `<p class="err">${escapeHtml(err.message)}</p>`
+  }
+}
+
+async function probeRouteKind(kindId) {
+  await api('/api/admin/route-health', { method: 'POST', body: JSON.stringify({ kind: kindId }) })
+  setTimeout(loadRouteHealth, 500)
 }
 
 async function loadSettings() {
