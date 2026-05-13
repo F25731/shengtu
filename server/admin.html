@@ -222,6 +222,8 @@
             <label class="wide"><span>首页公告</span><textarea id="announcement_text" placeholder="首页公告内容"></textarea></label>
             <label class="wide"><span>入口页说明</span><textarea id="gate_notice_text" placeholder="客户第一次输入卡密前看到的产品介绍"></textarea></label>
             <label class="wide"><span>提示词屏蔽词（一行一个）</span><textarea id="blocked_words" placeholder="例如：习近平&#10;政治人物姓名&#10;不想让用户提交的关键词"></textarea></label>
+            <label><span>政治人物防护</span><select id="political_protection_enabled"><option value="1">开启</option><option value="0">关闭</option></select></label>
+            <label class="wide"><span>政治人物防护名单（一行一个）</span><textarea id="political_block_words" placeholder="例如：习近平&#10;Xi Jinping&#10;国家领导人"></textarea></label>
           </div>
         </section>
 
@@ -289,7 +291,7 @@ let cardTotal = 0
 let currentCards = []
 let deletingCardCode = ''
 const cardPageSize = 10
-const basicSettingKeys = ['purchase_url', 'cost_per_generation', 'max_concurrent_generations', 'max_input_images', 'max_input_image_mb', 'announcement_text', 'gate_notice_text', 'blocked_words']
+const basicSettingKeys = ['purchase_url', 'cost_per_generation', 'max_concurrent_generations', 'max_input_images', 'max_input_image_mb', 'announcement_text', 'gate_notice_text', 'blocked_words', 'political_protection_enabled', 'political_block_words']
 const modelKinds = [
   { id: 'chatgpt', label: 'ChatGPT', defaultModel: 'gpt-image-2', defaultMaxImages: 10 },
   { id: 'gemini', label: 'Gemini', defaultModel: 'gemini-3-pro-image-preview', defaultMaxImages: 14 },

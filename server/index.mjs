@@ -32,6 +32,36 @@ const routeProbeTimeoutMs = 4 * 60 * 1000
 const routeProbePrompt = process.env.YUNYI_ROUTE_PROBE_PROMPT || '生成一张简单的蓝天白云风景小图'
 const defaultInputImageLimit = 16
 const defaultInputImageMb = 10
+const defaultPoliticalBlockWords = [
+  '习近平',
+  'Xi Jinping',
+  '彭丽媛',
+  '毛泽东',
+  'Mao Zedong',
+  '邓小平',
+  'Deng Xiaoping',
+  '江泽民',
+  'Jiang Zemin',
+  '胡锦涛',
+  'Hu Jintao',
+  '李强',
+  'Li Qiang',
+  '李克强',
+  'Li Keqiang',
+  '王沪宁',
+  '赵乐际',
+  '韩正',
+  '蔡奇',
+  '丁薛祥',
+  '李希',
+  '张又侠',
+  '何卫东',
+  '国家主席',
+  '中共中央总书记',
+  '政治局常委',
+  '中国领导人',
+  '国家领导人',
+].join('\n')
 const defaultAnnouncementText = '公告：ChatGPT 审核较严格，涉及版权角色、敏感信息或不合规内容可能生成失败；失败不会扣次数，请调整提示词后重试。'
 const defaultGateNoticeText = '云逸生图支持 ChatGPT、Gemini 与 Grok 生图，可上传参考图继续修改，并保留历史记录用于预览和下载。请输入卡密开始使用。'
 
@@ -134,6 +164,8 @@ function initDatabase() {
     announcement_text: process.env.YUNYI_ANNOUNCEMENT_TEXT || defaultAnnouncementText,
     gate_notice_text: process.env.YUNYI_GATE_NOTICE_TEXT || defaultGateNoticeText,
     blocked_words: process.env.YUNYI_BLOCKED_WORDS || '',
+    political_protection_enabled: process.env.YUNYI_POLITICAL_PROTECTION_ENABLED || '1',
+    political_block_words: process.env.YUNYI_POLITICAL_BLOCK_WORDS || defaultPoliticalBlockWords,
   }
   for (const [key, value] of Object.entries(defaults)) {
     const existing = selectOne('SELECT key FROM settings WHERE key = ?', [key])
@@ -154,7 +186,7 @@ function getSettings() {
 }
 
 function setSettings(input) {
-  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'max_input_images', 'max_input_image_mb', 'announcement_text', 'gate_notice_text', 'blocked_words', 'model_routes']
+  const allowed = ['purchase_url', 'backgrace_api_url', 'backgrace_api_key', 'ai6800_api_url', 'ai6800_api_key', 'chatgpt_provider', 'gemini_provider', 'grok_provider', 'image_model', 'gemini_model', 'grok_model', 'cost_per_generation', 'max_concurrent_generations', 'max_input_images', 'max_input_image_mb', 'announcement_text', 'gate_notice_text', 'blocked_words', 'political_protection_enabled', 'political_block_words', 'model_routes']
   for (const key of allowed) {
     if (Object.prototype.hasOwnProperty.call(input, key)) {
       const value = key === 'model_routes' && typeof input[key] !== 'string'
@@ -996,16 +1028,34 @@ function extractPrompt(contentType, body) {
   return ''
 }
 
-function parseBlockedWords(settings) {
-  return String(settings.blocked_words || '')
+function parseWordList(value) {
+  return String(value || '')
     .split(/\r?\n/)
     .map((item) => item.trim())
     .filter((item) => item && !item.startsWith('#'))
 }
 
+function parseBlockedWords(settings) {
+  return parseWordList(settings.blocked_words)
+}
+
+function isPoliticalProtectionEnabled(settings) {
+  return String(settings.political_protection_enabled ?? '1') !== '0'
+}
+
+function parsePoliticalBlockWords(settings) {
+  if (!isPoliticalProtectionEnabled(settings)) return []
+  return parseWordList(settings.political_block_words || defaultPoliticalBlockWords)
+}
+
+function stripInternalSafetyInstructions(prompt) {
+  return String(prompt || '').replace(/\[YUNYI_INTERNAL_SAFETY\][\s\S]*?\[\/YUNYI_INTERNAL_SAFETY\]\s*/g, '')
+}
+
 function findBlockedWord(prompt, settings) {
-  const rawPrompt = String(prompt || '').toLowerCase()
-  for (const word of parseBlockedWords(settings)) {
+  const rawPrompt = stripInternalSafetyInstructions(prompt).toLowerCase()
+  const words = [...parseBlockedWords(settings), ...parsePoliticalBlockWords(settings)]
+  for (const word of words) {
     const lowerWord = word.toLowerCase()
     if (lowerWord && rawPrompt.includes(lowerWord)) return word
   }

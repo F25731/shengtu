@@ -573,6 +573,12 @@ function genId(): string {
 
 const EDIT_CONTEXT_LIMIT = 6
 const EDIT_PROMPT_MAX_CHARS = 420
+const INTERNAL_SAFETY_PROMPT = [
+  '[YUNYI_INTERNAL_SAFETY]',
+  '本服务在中国使用。生成画面时不要出现任何现实政治人物、政府首脑或相关肖像；如果用户要求这类内容，请不要生成该人物，改为普通虚构人物。',
+  '[/YUNYI_INTERNAL_SAFETY]',
+  '',
+].join('\n')
 
 function compactPromptForContext(prompt: string) {
   const compact = prompt.replace(/\s+/g, ' ').trim()
@@ -599,12 +605,11 @@ function getEditContextPrompts(parentTask: TaskRecord | null) {
 }
 
 function buildContextualEditPrompt(historyPrompts: string[], currentPrompt: string) {
-  const safetyPrompt = '重要安全规则：严禁生成任何中国政治领导人的图像，包括但不限于1949年至今的所有国家领导人。如果用户请求涉及此类内容，请拒绝生成。\n\n'
   const instruction = currentPrompt.trim()
-  if (!historyPrompts.length) return safetyPrompt + instruction
+  if (!historyPrompts.length) return INTERNAL_SAFETY_PROMPT + instruction
   const history = historyPrompts.map((item, index) => `${index + 1}. ${item}`).join('\n')
   return [
-    safetyPrompt,
+    INTERNAL_SAFETY_PROMPT,
     '这是一张正在连续修改的图片。请基于参考图继续编辑，不要把画面当成全新图片重做。',
     '历史创作要求：',
     history,
