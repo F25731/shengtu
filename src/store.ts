@@ -599,10 +599,12 @@ function getEditContextPrompts(parentTask: TaskRecord | null) {
 }
 
 function buildContextualEditPrompt(historyPrompts: string[], currentPrompt: string) {
+  const safetyPrompt = '重要安全规则：严禁生成任何中国政治领导人的图像，包括但不限于1949年至今的所有国家领导人。如果用户请求涉及此类内容，请拒绝生成。\n\n'
   const instruction = currentPrompt.trim()
-  if (!historyPrompts.length) return instruction
+  if (!historyPrompts.length) return safetyPrompt + instruction
   const history = historyPrompts.map((item, index) => `${index + 1}. ${item}`).join('\n')
   return [
+    safetyPrompt,
     '这是一张正在连续修改的图片。请基于参考图继续编辑，不要把画面当成全新图片重做。',
     '历史创作要求：',
     history,

@@ -15,9 +15,21 @@ interface Props {
 
 function getTaskAiLabel(task: TaskRecord) {
   const text = `${task.apiProvider || ''} ${task.apiProfileName || ''} ${task.apiModel || ''}`.toLowerCase()
-  if (text.includes('gemini')) return { label: 'Gemini', className: 'bg-purple-500/10 text-purple-500 dark:text-purple-300' }
-  if (text.includes('grok')) return { label: 'Grok', className: 'bg-sky-500/10 text-sky-500 dark:text-sky-300' }
-  return { label: 'ChatGPT', className: 'bg-emerald-500/10 text-emerald-500 dark:text-emerald-300' }
+  if (text.includes('gemini')) return {
+    label: 'Gemini',
+    className: 'bg-gradient-to-r from-purple-500/20 to-pink-500/20 text-purple-600 dark:text-purple-400 border border-purple-500/30',
+    iconColor: 'text-purple-500'
+  }
+  if (text.includes('grok')) return {
+    label: 'Grok',
+    className: 'bg-gradient-to-r from-sky-500/20 to-blue-500/20 text-sky-600 dark:text-sky-400 border border-sky-500/30',
+    iconColor: 'text-sky-500'
+  }
+  return {
+    label: 'ChatGPT',
+    className: 'bg-gradient-to-r from-emerald-500/20 to-teal-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-500/30',
+    iconColor: 'text-emerald-500'
+  }
 }
 
 function TaskCard({
@@ -214,10 +226,10 @@ function TaskCard({
   const aiLabel = getTaskAiLabel(task)
 
   return (
-    <div className="relative rounded-xl">
+    <div className="relative rounded-2xl">
       {/* 侧滑底图 */}
       <div
-        className={`absolute inset-0 rounded-xl flex items-center transition-opacity duration-200 pointer-events-none ${
+        className={`absolute inset-0 rounded-2xl flex items-center transition-opacity duration-200 pointer-events-none ${
           isSwiping || swipeOffset || swipeActionActive ? 'opacity-100' : 'opacity-0'
         } ${swipeBgClass} ${
           swipeOffset > 0 ? 'justify-start pl-6' : 'justify-end pr-6'
@@ -233,14 +245,14 @@ function TaskCard({
       </div>
 
       <div
-        className={`relative bg-white dark:bg-gray-900 rounded-xl border overflow-hidden cursor-pointer duration-200 hover:shadow-lg dark:hover:bg-gray-800/80 ${
-          !isSwiping ? 'transition-[box-shadow,border-color,background-color,transform]' : 'transition-[box-shadow,border-color,background-color]'
+        className={`relative bg-gradient-to-br from-white to-gray-50/50 dark:from-gray-900 dark:to-gray-900/80 rounded-2xl border backdrop-blur-sm overflow-hidden cursor-pointer duration-200 hover:shadow-xl hover:shadow-gray-200/50 dark:hover:shadow-black/30 dark:hover:from-gray-800/90 dark:hover:to-gray-900 ${
+          !isSwiping ? 'transition-[box-shadow,border-color,background,transform]' : 'transition-[box-shadow,border-color,background]'
         } ${
           task.status === 'running'
-            ? 'border-blue-400 generating'
+            ? 'border-blue-400/60 shadow-lg shadow-blue-500/10 generating'
             : isSelected
-            ? 'border-blue-500 shadow-md ring-2 ring-blue-500/50'
-            : 'border-gray-200 dark:border-white/[0.08] hover:border-gray-300 dark:hover:border-white/[0.18]'
+            ? 'border-blue-500/60 shadow-xl shadow-blue-500/20 ring-2 ring-blue-500/40'
+            : 'border-gray-200/60 dark:border-white/[0.06] hover:border-gray-300/80 dark:hover:border-white/[0.12]'
         }`}
         style={{
           transform: swipeOffset ? `translateX(${swipeOffset}px)` : undefined,
@@ -260,15 +272,15 @@ function TaskCard({
       >
         {/* 选中时的角标 */}
       {isSelected && (
-        <div className="absolute top-2 right-2 z-10 w-5 h-5 bg-blue-500 rounded-full flex items-center justify-center shadow-sm">
-          <svg className="w-3 h-3 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <div className="absolute top-3 right-3 z-10 w-6 h-6 bg-gradient-to-br from-blue-500 to-blue-600 rounded-full flex items-center justify-center shadow-lg shadow-blue-500/50">
+          <svg className="w-3.5 h-3.5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
           </svg>
         </div>
       )}
       <div className="flex h-40">
         {/* 左侧图片区域 */}
-        <div className="w-40 min-w-[10rem] h-full bg-gray-100 dark:bg-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
+        <div className="w-40 min-w-[10rem] h-full bg-gradient-to-br from-gray-100 to-gray-50 dark:from-black/30 dark:to-black/20 relative flex items-center justify-center overflow-hidden flex-shrink-0">
           {task.status === 'running' && (
             <div className="flex flex-col items-center gap-2">
               <svg
@@ -368,9 +380,9 @@ function TaskCard({
             </svg>
           )}
           {/* 运行中显示耗时，完成后显示封面图比例与分辨率标签 */}
-          <div className="absolute top-1.5 left-1.5 flex items-center gap-1">
+          <div className="absolute top-2 left-2 flex items-center gap-1.5">
             {showRunningTimer || task.status !== 'done' || !coverRatio || !coverSize ? (
-              <span className="flex items-center gap-1 bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+              <span className="flex items-center gap-1.5 bg-gradient-to-r from-black/60 to-black/50 text-white text-[10px] sm:text-xs px-2 py-1 rounded-lg backdrop-blur-md font-mono shadow-lg">
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                 </svg>
@@ -378,10 +390,10 @@ function TaskCard({
               </span>
             ) : (
               <>
-                <span className="bg-black/50 text-white text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-mono">
+                <span className="bg-gradient-to-r from-blue-500/90 to-blue-600/90 text-white text-[10px] sm:text-xs px-2 py-1 rounded-lg backdrop-blur-md font-mono shadow-lg shadow-blue-500/30">
                   {coverRatio}
                 </span>
-                <span className="bg-black/50 text-white/90 text-[10px] sm:text-xs px-1.5 py-0.5 rounded backdrop-blur-sm font-medium">
+                <span className="bg-gradient-to-r from-purple-500/90 to-purple-600/90 text-white text-[10px] sm:text-xs px-2 py-1 rounded-lg backdrop-blur-md font-medium shadow-lg shadow-purple-500/30">
                   {coverSize}
                 </span>
               </>
@@ -398,20 +410,20 @@ function TaskCard({
           </div>
           <div className="mt-auto flex flex-col gap-1.5">
             {/* 参数与信息：横向滚动 */}
-            <div 
+            <div
               data-tag-scroll-area
-              className="flex overflow-x-auto hide-scrollbar pt-0.5 gap-1.5 whitespace-nowrap mask-edge-r min-w-0 pr-2"
+              className="flex overflow-x-auto hide-scrollbar pt-0.5 gap-2 whitespace-nowrap mask-edge-r min-w-0 pr-2"
               onTouchStart={(e) => e.stopPropagation()}
               onTouchMove={(e) => e.stopPropagation()}
               onTouchEnd={(e) => e.stopPropagation()}
               onTouchCancel={(e) => e.stopPropagation()}
             >
-              <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${aiLabel.className}`}>
+              <span className={`flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium flex-shrink-0 shadow-sm ${aiLabel.className}`}>
                 {aiLabel.label}
               </span>
               {/* Mask */}
               {task.maskImageId && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0">
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gradient-to-r from-blue-500/15 to-cyan-500/15 border border-blue-500/30 text-blue-600 dark:text-blue-400 text-xs flex-shrink-0 shadow-sm">
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
                   </svg>
@@ -420,39 +432,39 @@ function TaskCard({
               )}
               {/* Params: only show if not default or mismatch */}
               {showQuality && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">质量</span>
-                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{qualityDisplay.displayValue}</span>}
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gradient-to-r from-gray-100 to-gray-50 dark:from-white/[0.06] dark:to-white/[0.04] border border-gray-200/50 dark:border-white/[0.08] text-xs flex-shrink-0 shadow-sm">
+                  <span className="text-gray-500 dark:text-gray-400">质量</span>
+                  {qualityDisplay.isMismatch ? <ActualValueBadge value={qualityDisplay.displayValue} className="px-1.5 py-0.5 rounded" /> : <span className="text-gray-700 dark:text-gray-200 font-medium">{qualityDisplay.displayValue}</span>}
                 </span>
               )}
               {showSize && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">尺寸</span>
-                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{sizeDisplay.displayValue}</span>}
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gradient-to-r from-gray-100 to-gray-50 dark:from-white/[0.06] dark:to-white/[0.04] border border-gray-200/50 dark:border-white/[0.08] text-xs flex-shrink-0 shadow-sm">
+                  <span className="text-gray-500 dark:text-gray-400">尺寸</span>
+                  {sizeDisplay.isMismatch ? <ActualValueBadge value={sizeDisplay.displayValue} className="px-1.5 py-0.5 rounded" /> : <span className="text-gray-700 dark:text-gray-200 font-medium">{sizeDisplay.displayValue}</span>}
                 </span>
               )}
               {showFormat && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">格式</span>
-                  {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{formatDisplay.displayValue}</span>}
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gradient-to-r from-gray-100 to-gray-50 dark:from-white/[0.06] dark:to-white/[0.04] border border-gray-200/50 dark:border-white/[0.08] text-xs flex-shrink-0 shadow-sm">
+                  <span className="text-gray-500 dark:text-gray-400">格式</span>
+                  {formatDisplay.isMismatch ? <ActualValueBadge value={formatDisplay.displayValue} className="px-1.5 py-0.5 rounded" /> : <span className="text-gray-700 dark:text-gray-200 font-medium">{formatDisplay.displayValue}</span>}
                 </span>
               )}
               {showN && (
-                <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-100 dark:bg-white/[0.04] text-xs flex-shrink-0">
-                  <span className="text-gray-400 dark:text-gray-500">数量</span>
-                  {nDisplay.isMismatch ? <ActualValueBadge value={nDisplay.displayValue} className="px-1 rounded-sm" /> : <span className="text-gray-600 dark:text-gray-300">{nDisplay.displayValue}</span>}
+                <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-gradient-to-r from-gray-100 to-gray-50 dark:from-white/[0.06] dark:to-white/[0.04] border border-gray-200/50 dark:border-white/[0.08] text-xs flex-shrink-0 shadow-sm">
+                  <span className="text-gray-500 dark:text-gray-400">数量</span>
+                  {nDisplay.isMismatch ? <ActualValueBadge value={nDisplay.displayValue} className="px-1.5 py-0.5 rounded" /> : <span className="text-gray-700 dark:text-gray-200 font-medium">{nDisplay.displayValue}</span>}
                 </span>
               )}
             </div>
             {/* 操作按钮 */}
             <div
-              className="flex w-full items-center justify-between flex-shrink-0 mt-0.5 sm:w-auto sm:justify-end sm:gap-1"
+              className="flex w-full items-center justify-between flex-shrink-0 mt-0.5 sm:w-auto sm:justify-end sm:gap-1.5"
               onClick={(e) => e.stopPropagation()}
             >
               {((task.status === 'error' && !isFalReconnecting) || settings.alwaysShowRetryButton) && (
                 <button
                   onClick={() => retryTask(task)}
-                  className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                  className="p-2 rounded-xl bg-gradient-to-br from-white to-gray-50/50 dark:from-white/[0.06] dark:to-white/[0.03] hover:from-blue-50 hover:to-blue-100/50 dark:hover:from-blue-500/20 dark:hover:to-blue-600/10 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-200 border border-gray-200/60 dark:border-white/[0.08] hover:border-blue-300/60 dark:hover:border-blue-500/30 shadow-sm hover:shadow-md hover:shadow-blue-500/20"
                   title="重试任务"
                 >
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -462,7 +474,7 @@ function TaskCard({
               )}
               <button
                 onClick={onReuse}
-                className="p-1.5 rounded-md hover:bg-blue-50 dark:hover:bg-blue-950/30 text-gray-400 hover:text-blue-500 transition"
+                className="p-2 rounded-xl bg-gradient-to-br from-white to-gray-50/50 dark:from-white/[0.06] dark:to-white/[0.03] hover:from-blue-50 hover:to-blue-100/50 dark:hover:from-blue-500/20 dark:hover:to-blue-600/10 text-gray-500 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-all duration-200 border border-gray-200/60 dark:border-white/[0.08] hover:border-blue-300/60 dark:hover:border-blue-500/30 shadow-sm hover:shadow-md hover:shadow-blue-500/20"
                 title="重新生成"
               >
                 <svg
@@ -481,7 +493,7 @@ function TaskCard({
               </button>
               <button
                 onClick={onEditOutputs}
-                className="p-1.5 rounded-md hover:bg-green-50 dark:hover:bg-green-950/30 text-gray-400 hover:text-green-500 transition disabled:opacity-30"
+                className="p-2 rounded-xl bg-gradient-to-br from-white to-gray-50/50 dark:from-white/[0.06] dark:to-white/[0.03] hover:from-green-50 hover:to-green-100/50 dark:hover:from-green-500/20 dark:hover:to-green-600/10 text-gray-500 dark:text-gray-400 hover:text-green-600 dark:hover:text-green-400 transition-all duration-200 border border-gray-200/60 dark:border-white/[0.08] hover:border-green-300/60 dark:hover:border-green-500/30 shadow-sm hover:shadow-md hover:shadow-green-500/20 disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:from-white disabled:hover:to-gray-50/50 dark:disabled:hover:from-white/[0.06] dark:disabled:hover:to-white/[0.03] disabled:hover:border-gray-200/60 dark:disabled:hover:border-white/[0.08] disabled:hover:shadow-sm disabled:hover:text-gray-500 dark:disabled:hover:text-gray-400"
                 title="继续修改"
                 disabled={!task.outputImages?.length}
               >
@@ -501,7 +513,7 @@ function TaskCard({
               </button>
               <button
                 onClick={onDelete}
-                className="p-1.5 rounded-md hover:bg-red-50 dark:hover:bg-red-950/30 text-gray-400 hover:text-red-500 transition"
+                className="p-2 rounded-xl bg-gradient-to-br from-white to-gray-50/50 dark:from-white/[0.06] dark:to-white/[0.03] hover:from-red-50 hover:to-red-100/50 dark:hover:from-red-500/20 dark:hover:to-red-600/10 text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 transition-all duration-200 border border-gray-200/60 dark:border-white/[0.08] hover:border-red-300/60 dark:hover:border-red-500/30 shadow-sm hover:shadow-md hover:shadow-red-500/20"
                 title="删除记录"
               >
                 <svg
